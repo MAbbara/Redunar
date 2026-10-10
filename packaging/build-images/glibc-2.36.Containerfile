@@ -1,4 +1,4 @@
-FROM docker.io/library/rust@sha256:408fe88047cef61a2087653b0c5255fa51c0f2d6d94ddedd7a2562a9b91a46f6
+FROM docker.io/library/rust@sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7
 
 ARG DEBIAN_FRONTEND=noninteractive
 

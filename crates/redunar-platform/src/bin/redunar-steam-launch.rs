@@ -36,6 +36,9 @@ fn main() -> ExitCode {
             }
         }
     }
+    if is_proton_invocation(&invocation) {
+        remove_opengl_preload(&mut managed);
+    }
     let managed_value = |name: &str| managed.get(&OsString::from(name)).cloned();
     let use_gamescope = managed_value("REDUNAR_GAMESCOPE")
         .or_else(|| env::var_os("REDUNAR_GAMESCOPE"))
@@ -80,6 +83,36 @@ fn main() -> ExitCode {
     } else {
         126
     })
+}
+
+fn is_proton_invocation(invocation: &Invocation) -> bool {
+    std::iter::once(&invocation.command)
+        .chain(invocation.arguments.iter())
+        .filter_map(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .any(|value| {
+            value == "proton"
+                || value.ends_with("/proton")
+                || value.contains("/pressure-vessel")
+                || value.contains("/steam-runtime")
+        })
+}
+
+fn remove_opengl_preload(managed: &mut BTreeMap<OsString, OsString>) {
+    let Some(preload) = managed.get(OsStr::new("LD_PRELOAD")).cloned() else {
+        return;
+    };
+    let retained = std::env::split_paths(&preload)
+        .filter(|path| path.file_name() != Some(OsStr::new("libredunar_capture_opengl.so")))
+        .collect::<Vec<_>>();
+    match std::env::join_paths(retained) {
+        Ok(value) if !value.is_empty() => {
+            managed.insert(OsString::from("LD_PRELOAD"), value);
+        }
+        _ => {
+            managed.remove(OsStr::new("LD_PRELOAD"));
+        }
+    }
 }
 
 fn broker_socket_path() -> Option<PathBuf> {
@@ -182,5 +215,36 @@ mod tests {
             ])
             .is_none()
         );
+    }
+
+    #[test]
+    fn proton_commands_disable_only_redunar_opengl_preload() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/steam/compatibilitytools.d/Proton/proton"),
+            arguments: Vec::new(),
+        };
+        assert!(is_proton_invocation(&invocation));
+        let mut managed = [(
+            OsString::from("LD_PRELOAD"),
+            OsString::from("/run/redunar/libredunar_capture_opengl.so:/usr/lib/game.so"),
+        )]
+        .into_iter()
+        .collect();
+        remove_opengl_preload(&mut managed);
+        assert_eq!(
+            managed.get(OsStr::new("LD_PRELOAD")),
+            Some(&OsString::from("/usr/lib/game.so"))
+        );
+    }
+
+    #[test]
+    fn native_commands_keep_redunar_opengl_preload() {
+        let invocation = Invocation {
+            app_id: None,
+            command: OsString::from("/games/native-game"),
+            arguments: Vec::new(),
+        };
+        assert!(!is_proton_invocation(&invocation));
     }
 }
