@@ -249,7 +249,7 @@ function globalOverlay() {
 }
 function globalReplay() {
  const folder=replayPreferences?.resolved_directory||'Loading replay folder…';
- return `<section class="panel controls-panel"><h2>Capture defaults</h2><p>Recording mode and quality apply to new game sessions. File format applies to future saves.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Applies to the next game launch in either recording mode',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Applies to future saves, including the current session',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Replay folder','Future clips are saved below this directory',`<span class="path-value">${escape(folder)}</span>`)}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
+ return `<section class="panel controls-panel"><h2>Capture defaults</h2><p>Recording mode and quality apply to new game sessions. File format applies to future saves.</p>${field('Instant replay','Buffers automatically for supported games launched through Redunar or configured Steam launch options. Clear shortcuts to prevent keyboard activation.','<span>Automatic</span>')}${field('Recording mode','',frameRateControl())}${field('Quality preset','Applies to the next game launch in either recording mode',selectControl('quality','Quality preset',['Efficient','Balanced','High'],draft.quality))}${field('File format','Applies to future saves, including the current session',selectControl('format','File format',['MKV','MP4'],draft.format))}${field('Initial save duration','Selected when the replay save control opens','<select aria-label="Replay menu initial duration" data-replay-preference="initial-duration">'+durations.map(d=>`<option value="${d}" ${d===Number(replayPreferences?.initial_save_duration_seconds||30)?'selected':''}>${d<60?d+' seconds':d/60+(d===60?' minute':' minutes')}</option>`).join('')+'</select>')}${field('Microphone','Capture a separate microphone track in new replays','<select aria-label="Replay microphone" data-replay-preference="microphone"><option value="off" '+(replayPreferences?.microphone_mode==='off'?'selected':'')+'>Off</option><option value="default" '+(replayPreferences?.microphone_mode==='default'?'selected':'')+'>Default input</option><option value="selected" '+(replayPreferences?.microphone_mode==='selected'?'selected':'')+'>Selected input</option></select>')}${field('Microphone mute','Temporarily stop microphone packets while Replay continues',button('Mute microphone','mute-microphone',false))}${old}<div class="replay-pref-actions"><button class="button" data-action="change-replay-folder">Change folder</button>${button('Use Videos folder','reset-replay-folder',false,replayPreferences?.custom_save_parent?'':'disabled')}</div>${field('Dismiss menu on outside click','Close the in-game Replay menu when its outside area is clicked',switchControl('outside','Dismiss menu on outside click',replayPreferences?.close_overlay_on_outside_click===true,'replay-preference',!native||!replayPreferences||busy))}</section>`;
 }
 function frameRateControl() {
  const selected=Number(draft.fps);
@@ -1091,6 +1091,9 @@ document.addEventListener('click',event=>{
    }
    render();
   }
+  if(action==='mute-microphone'){
+   await call('set_replay_microphone_mute',{muted:true});notify('Microphone muted for this session.');return;
+  }
   if(action==='save-replay'){
    await call('save_replay',{durationSeconds:Number($('#save-duration').value)});
    notify('Replay save requested. The clip will appear when the backend finishes saving.');await refreshRuntime();
@@ -1146,6 +1149,12 @@ document.addEventListener('change',event=>{
    syncMetricToggles();
   }else draft[key]=t.type==='checkbox'?t.checked:['fps','scale','opacity'].includes(key)?Number(t.value):t.value;
   updateHud();
+  return;
+ }
+ if(t.dataset.replayPreference==='microphone'){
+  const mode=String(t.value);
+  if(!native||!replayPreferences||busy)return;
+  perform(async()=>{replayPreferences=await call('set_replay_microphone',{mode,source:replayPreferences.microphone_source||null});render();notify(mode==='off'?'Microphone capture disabled.':'Microphone capture enabled for new sessions.');});
   return;
  }
  if(t.dataset.replayPreference==='outside'){
