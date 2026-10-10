@@ -30,6 +30,9 @@ struct ProductionAudioState {
     recording: bool,
     buffer: ReplayAudioBuffer,
     last_progress: Option<Instant>,
+    microphone_buffer: ReplayAudioBuffer,
+    microphone_recording: bool,
+    microphone_muted: bool,
 }
 
 struct RuntimeState {
@@ -81,6 +84,12 @@ impl ProductionReplayRuntime {
                     ReplayDuration::Seconds900,
                     redunar_capture_audio::OpusStreamDescription::default(),
                 ),
+                microphone_buffer: ReplayAudioBuffer::new(
+                    ReplayDuration::Seconds900,
+                    redunar_capture_audio::OpusStreamDescription::default(),
+                ),
+                microphone_recording: false,
+                microphone_muted: false,
             })),
             inner: Arc::new(Mutex::new(RuntimeState {
                 status: ReplayRuntimeStatus::unavailable(settings),
@@ -295,6 +304,25 @@ impl ProductionReplayRuntime {
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
         audio.last_progress = Some(Instant::now());
         Ok(())
+    }
+
+    /// Add one encoded microphone packet without affecting system audio or video.
+    pub(crate) fn submit_microphone_audio(
+        &self,
+        packet: redunar_capture_audio::EncodedOpusPacket,
+    ) -> Result<(), ReplayRuntimeError> {
+        let mut audio = lock_unpoisoned(&self.audio);
+        if !audio.recording || !audio.microphone_recording || audio.microphone_muted {
+            return Err(ReplayRuntimeError::new("microphone capture is inactive"));
+        }
+        audio
+            .microphone_buffer
+            .push(packet)
+            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+    }
+
+    pub(crate) fn set_microphone_muted(&self, muted: bool) {
+        lock_unpoisoned(&self.audio).microphone_muted = muted;
     }
 
     /// Replace the active encoder after the capture source changes size.
@@ -536,6 +564,8 @@ impl ProductionReplayRuntime {
         let mut audio = lock_unpoisoned(&self.audio);
         audio.recording = false;
         audio.buffer.clear();
+        audio.microphone_buffer.clear();
+        audio.microphone_recording = false;
         state.status.phase = if result.is_err() {
             state.status.last_failure = Some(ReplayFailure::EncoderFailed);
             ReplayPhase::Failed

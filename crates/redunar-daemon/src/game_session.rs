@@ -2,10 +2,10 @@ use crate::capture_session::ReplayExportEndpoint;
 use crate::replay_menu::{ReplayMenuAction, ReplayMenuState};
 use crate::{
     CaptureLaunchDisposition, CaptureLaunchProcessState, CapturePhase, CaptureSessionError,
-    CaptureSessionHandle, DmaBufReplayFrame, HardwareEncoderBackend, OverlayRuntimeStatus,
-    ProductionReplayRuntime, ReplayBackendReadiness, ReplayFailure, ReplayHardwarePipeline,
-    ReplayPhase, ReplayPreferences, ReplayRuntimeError, ReplayRuntimeStatus, SteamActivationState,
-    replay_preferences,
+    CaptureSessionHandle, DmaBufReplayFrame, HardwareEncoderBackend, MicrophoneMode,
+    OverlayRuntimeStatus, ProductionReplayRuntime, ReplayBackendReadiness, ReplayFailure,
+    ReplayHardwarePipeline, ReplayPhase, ReplayPreferences, ReplayRuntimeError,
+    ReplayRuntimeStatus, SteamActivationState, replay_preferences,
 };
 use redunar_capture::CaptureApi;
 use redunar_core::{GameId, ReplayDuration, ReplaySettings, SystemSnapshot};
@@ -895,6 +895,7 @@ fn run_replay_export_pump(
     let mut consecutive_source_errors = 0_u32;
     let mut last_source_error_log: Option<Instant> = None;
     let mut audio_worker = None;
+    let mut microphone_worker = None;
     let mut pending_releases = VecDeque::new();
     let mut diagnostic_timeline = crate::replay_logging::VideoTimeline::new(settings.frame_rate);
     while !stop.load(Ordering::Acquire) {
@@ -1040,6 +1041,24 @@ fn run_replay_export_pump(
                 audio_worker =
                     start_game_audio_worker(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
             }
+            if microphone_worker.is_none() {
+                let microphone = coordinator
+                    .upgrade()
+                    .map(|inner| {
+                        lock_unpoisoned(&inner.replay_preferences)
+                            .microphone
+                            .clone()
+                    })
+                    .unwrap_or(MicrophoneMode::Off);
+                if !matches!(microphone, MicrophoneMode::Off) {
+                    microphone_worker = start_microphone_audio_worker(
+                        Arc::clone(&stop),
+                        replay.clone(),
+                        frame.timestamp_ns,
+                        microphone,
+                    );
+                }
+            }
         } else if dimensions != Some(frame_dimensions) {
             let Ok(replacement) = backend_factory(&frame) else {
                 crate::log_op!(
@@ -1121,6 +1140,9 @@ fn run_replay_export_pump(
     if let Some(worker) = audio_worker {
         let _ = worker.join();
     }
+    if let Some(worker) = microphone_worker {
+        let _ = worker.join();
+    }
     diagnostic_timeline.finish(&replay);
     let shutdown = replay.shutdown();
     let releases = release_runtime_completions(source.as_ref(), &replay, &mut pending_releases);
@@ -1163,6 +1185,82 @@ fn enter_replay_recovery(
     *dimensions = None;
     *rearm_deadline = Some(Instant::now() + *rearm_backoff);
     *rearm_backoff = rearm_backoff.mul_f32(2.0).min(REPLAY_REARM_BACKOFF_MAX);
+}
+
+fn start_microphone_audio_worker(
+    stop: Arc<AtomicBool>,
+    replay: ProductionReplayRuntime,
+    first_frame_timestamp_ns: u64,
+    mode: MicrophoneMode,
+) -> Option<JoinHandle<()>> {
+    let timeline_started = Instant::now();
+    let timeline_timestamp_ns =
+        redunar_capture_audio::monotonic_now_ns().unwrap_or(first_frame_timestamp_ns);
+    thread::Builder::new()
+        .name("redunar-replay-microphone".to_owned())
+        .spawn(move || {
+            run_microphone_audio_worker(
+                &stop,
+                &replay,
+                timeline_timestamp_ns,
+                timeline_started,
+                mode,
+            )
+        })
+        .map_err(|error| {
+            crate::log_op!("Redunar Replay: could not start microphone worker: {error}")
+        })
+        .ok()
+}
+
+fn run_microphone_audio_worker(
+    stop: &Arc<AtomicBool>,
+    replay: &ProductionReplayRuntime,
+    timeline_timestamp_ns: u64,
+    timeline_started: Instant,
+    mode: MicrophoneMode,
+) {
+    while !stop.load(Ordering::Acquire) {
+        let sources = redunar_capture_audio::discover_microphone_audio_sources();
+        let source = match &mode {
+            MicrophoneMode::DefaultInput => sources.first().cloned(),
+            MicrophoneMode::SelectedInput(name) => sources
+                .into_iter()
+                .find(|candidate| candidate.name() == name),
+            MicrophoneMode::Off => None,
+        };
+        let Some(source) = source else {
+            crate::log_op!("Redunar Replay: microphone input unavailable; retrying");
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        };
+        let Ok(mut capture) = redunar_capture_audio::MicrophoneAudioCapture::start(
+            &source,
+            timeline_timestamp_ns,
+            timeline_started,
+        ) else {
+            crate::log_op!(
+                "Redunar Replay: microphone capture unavailable via {}; retrying",
+                source.backend_name()
+            );
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        };
+        crate::log_op!(
+            "Redunar Replay: microphone capture active via {}",
+            source.backend_name()
+        );
+        while !stop.load(Ordering::Acquire) {
+            match capture.next_packet(Duration::from_millis(100)) {
+                Ok(Some(packet)) => {
+                    let _ = replay.submit_microphone_audio(packet);
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn start_game_audio_worker(
