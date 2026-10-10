@@ -27,12 +27,39 @@ pub(crate) fn write_streaming_matroska(
     source: &mut impl crate::replay_packet_source::ReplayPacketSource,
     audio: &ReplayAudioSnapshot,
 ) -> Result<u64, MatroskaVideoError> {
+    let tracks = ReplayAudioTracks {
+        system: audio.clone(),
+        microphone: None,
+    };
+    write_streaming_matroska_tracks(destination, stream, source, &tracks)
+}
+
+pub(crate) fn write_streaming_matroska_tracks(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+    audio: &ReplayAudioTracks,
+) -> Result<u64, MatroskaVideoError> {
     let (origin, end) = source.window();
     let audio_packets = audio
+        .system
         .packets
         .iter()
         .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
+        .map(|packet| (packet, 2))
         .collect::<Vec<_>>();
+    let microphone_packets = audio
+        .microphone
+        .as_ref()
+        .map(|microphone| {
+            microphone
+                .packets
+                .iter()
+                .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
+                .map(|packet| (packet, 3))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut output = CountingWriter::new(destination);
     write_ebml_header(&mut output)?;
     output.write_all(ID_SEGMENT)?;
@@ -42,10 +69,15 @@ pub(crate) fn write_streaming_matroska(
         end.checked_sub(origin)
             .ok_or(MatroskaVideoError::TimestampOverflow)?,
     )?;
-    if audio_packets.is_empty() {
+    if audio_packets.is_empty() && microphone_packets.is_empty() {
         write_tracks(&mut output, stream)?;
     } else {
-        write_audio_video_tracks(&mut output, stream, audio, None)?;
+        write_audio_video_tracks(
+            &mut output,
+            stream,
+            &audio.system,
+            audio.microphone.as_ref(),
+        )?
     }
     let mut cluster = None;
     let mut next_audio = 0;
@@ -59,11 +91,11 @@ pub(crate) fn write_streaming_matroska(
             .validate_packet(packet.bytes())
             .map_err(|_| MatroskaVideoError::InvalidPacket)?;
         while next_audio < audio_packets.len()
-            && audio_packets[next_audio].timestamp_ns < packet.timestamp_ns()
+            && audio_packets[next_audio].0.timestamp_ns < packet.timestamp_ns()
         {
             write_streaming_block(
                 &mut output,
-                MatroskaBlock::Audio(audio_packets[next_audio], 2),
+                MatroskaBlock::Audio(audio_packets[next_audio].0, audio_packets[next_audio].1),
                 origin,
                 &mut cluster,
             )?;
@@ -83,7 +115,16 @@ pub(crate) fn write_streaming_matroska(
         source.check_cancel()?;
         write_streaming_block(
             &mut output,
-            MatroskaBlock::Audio(packet, 2),
+            MatroskaBlock::Audio(packet.0, packet.1),
+            origin,
+            &mut cluster,
+        )?;
+    }
+    for packet in &microphone_packets {
+        source.check_cancel()?;
+        write_streaming_block(
+            &mut output,
+            MatroskaBlock::Audio(packet.0, packet.1),
             origin,
             &mut cluster,
         )?;

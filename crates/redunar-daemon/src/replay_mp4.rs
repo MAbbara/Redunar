@@ -20,27 +20,58 @@ pub(crate) fn write_streaming_mp4(
     source: &mut impl crate::replay_packet_source::ReplayPacketSource,
     audio: &ReplayAudioSnapshot,
 ) -> Result<u64, Mp4VideoError> {
+    let tracks = ReplayAudioTracks {
+        system: audio.clone(),
+        microphone: None,
+    };
+    write_streaming_mp4_tracks(destination, stream, source, &tracks)
+}
+
+pub(crate) fn write_streaming_mp4_tracks(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+    audio: &ReplayAudioTracks,
+) -> Result<u64, Mp4VideoError> {
     if stream.codec() != ReplayVideoCodec::H264 {
         return Err(Mp4VideoError::UnsupportedCodec);
     }
     let (origin, video_end) = source.window();
     let audio_packets = audio
+        .system
         .packets
         .iter()
         .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < video_end)
         .collect::<Vec<_>>();
-    if audio_packets.iter().any(|packet| {
-        packet.bytes.is_empty() || packet.bytes.len() > 4096 || packet.duration_ns == 0
-    }) {
+    let microphone_packets = audio
+        .microphone
+        .as_ref()
+        .map(|microphone| {
+            microphone
+                .packets
+                .iter()
+                .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < video_end)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if audio_packets
+        .iter()
+        .chain(microphone_packets.iter())
+        .any(|packet| {
+            packet.bytes.is_empty() || packet.bytes.len() > 4096 || packet.duration_ns == 0
+        })
+    {
         return Err(Mp4VideoError::InvalidPacket);
     }
     let mut output = CountingWriter::new(destination);
     output.write_all(&ftyp()?)?;
-    output.write_all(&if audio_packets.is_empty() {
-        moov(stream)?
-    } else {
-        moov_with_audio(stream, audio)?
-    })?;
+    output.write_all(
+        &if audio_packets.is_empty() && microphone_packets.is_empty() {
+            moov(stream)?
+        } else {
+            moov_with_audio_tracks(stream, audio)?
+        },
+    )?;
     let mut chunk: Vec<EncodedReplayPacket> = Vec::new();
     let mut bytes = 0;
     let mut fragments = 0_u32;
@@ -86,13 +117,40 @@ pub(crate) fn write_streaming_mp4(
     }
     // Preserve audio gaps rather than collapsing later sound into contiguous
     // sample durations. Audio already has its independent fixed memory bound.
+    write_streaming_audio_fragments(
+        &mut output,
+        source,
+        &mut fragments,
+        origin,
+        &audio_packets,
+        AUDIO_TRACK_ID,
+    )?;
+    write_streaming_audio_fragments(
+        &mut output,
+        source,
+        &mut fragments,
+        origin,
+        &microphone_packets,
+        MICROPHONE_TRACK_ID,
+    )?;
+    Ok(output.written)
+}
+
+fn write_streaming_audio_fragments(
+    output: &mut impl Write,
+    source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+    fragments: &mut u32,
+    origin: u64,
+    packets: &[&EncodedOpusPacket],
+    track_id: u32,
+) -> Result<(), Mp4VideoError> {
     let mut start = 0;
-    while start < audio_packets.len() {
+    while start < packets.len() {
         source.check_cancel()?;
         let mut end = start + 1;
-        while end < audio_packets.len() && end - start < 1500 {
-            let previous = audio_packets[end - 1];
-            if audio_packets[end]
+        while end < packets.len() && end - start < 1500 {
+            let previous = packets[end - 1];
+            if packets[end]
                 .timestamp_ns
                 .saturating_sub(previous.timestamp_ns.saturating_add(previous.duration_ns))
                 > 5_000_000
@@ -101,17 +159,11 @@ pub(crate) fn write_streaming_mp4(
             }
             end += 1;
         }
-        fragments += 1;
-        write_audio_fragment(
-            &mut output,
-            fragments,
-            origin,
-            &audio_packets[start..end],
-            AUDIO_TRACK_ID,
-        )?;
+        *fragments += 1;
+        write_audio_fragment(output, *fragments, origin, &packets[start..end], track_id)?;
         start = end;
     }
-    Ok(output.written)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
