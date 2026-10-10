@@ -40,7 +40,7 @@ withholds writes for compatibility with older builds that do not take the lock.
 | `redunar-capture` | Versioned bounded telemetry/control contracts |
 | `redunar-capture-vulkan` | Game-local presentation measurements, metrics rendering, bounded GPU frame export |
 | `redunar-capture-opengl` | Launch-scoped GLX/EGL/SDL presentation measurements, metrics rendering, and guarded desktop-OpenGL Replay export |
-| `redunar-capture-audio` | Default-output capture through PulseAudio or PipeWire and Opus packets; see audio behavior in REPLAY |
+| `redunar-capture-audio` | Default-output and optional microphone capture through PulseAudio or PipeWire, with bounded Opus packets; see audio behavior in REPLAY |
 | `redunar-hotkeys` | Same-user bounded keyboard shortcut helper |
 | `redunar-capture-kms` | Experimental diagnostic, excluded from production Replay |
 
