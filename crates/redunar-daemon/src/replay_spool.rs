@@ -27,7 +27,13 @@ const TARGET_SEGMENT_NS: u64 = 2_000_000_000;
 const MAX_SEGMENT_NS: u64 = 4_000_000_000;
 const MAX_SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SEGMENTS: usize = 512;
-const COMMAND_CAPACITY: usize = 4;
+// Encoders can hand packets to the spool in short bursts (especially when a
+// hardware encoder flushes several frames at once). Four entries allowed a
+// normal burst to overflow immediately, and one dropped packet forced a
+// keyframe resync that became a multi-second hole in the replay. Keep the
+// queue bounded, but large enough to absorb roughly a second of encoded work
+// without blocking the game thread.
+const COMMAND_CAPACITY: usize = 64;
 const MAX_WRITE_LATENCY: Duration = Duration::from_millis(500);
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const BYTES_PER_MEGABIT: u64 = 1_000_000 / 8;
@@ -1350,8 +1356,39 @@ mod tests {
         assert_eq!(stats.buffered_duration_ns, 40 * NANOSECONDS_PER_SECOND);
         assert_eq!(stats.accepted_packets, 40);
         assert_eq!(stats.dropped_queue_full, 0);
-        assert_eq!(COMMAND_CAPACITY, 4);
+        assert_eq!(COMMAND_CAPACITY, 64);
         assert_eq!(MAX_SEGMENT_BYTES, 32 * 1024 * 1024);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn burst_submission_does_not_drop_a_short_encoded_history() {
+        let root = fixture();
+        let mut spool = ReplaySegmentSpool::open(&root, settings(ReplayDuration::Seconds15))
+            .expect("open spool");
+        let packet_count = 32_u64;
+        let packet_bytes = usize::try_from(
+            u64::from(ReplayQuality::Efficient.target_megabits_per_second()) * BYTES_PER_MEGABIT,
+        )
+        .expect("bounded packet size");
+
+        for index in 0..packet_count {
+            spool
+                .try_submit(packet_with_payload_bytes(
+                    index * NANOSECONDS_PER_SECOND,
+                    index % 2 == 0,
+                    packet_bytes,
+                ))
+                .expect("burst should fit the bounded spool queue");
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while spool.stats().accepted_packets < packet_count {
+            assert!(Instant::now() < deadline, "spool fixture worker stalled");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(spool.stats().dropped_queue_full, 0);
+        spool.shutdown();
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1375,7 +1412,7 @@ mod tests {
         assert_eq!(efficient.bytes, 1_485_000_000);
         assert_eq!(balanced.bytes, 2_970_000_000);
         assert_eq!(high.bytes, 4_950_000_000);
-        assert_eq!(COMMAND_CAPACITY, 4);
+        assert_eq!(COMMAND_CAPACITY, 64);
         assert_eq!(MAX_SEGMENTS, 512);
         assert_eq!(MAX_SEGMENT_BYTES, 32 * 1024 * 1024);
     }
