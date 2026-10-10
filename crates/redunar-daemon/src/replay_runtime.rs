@@ -321,7 +321,7 @@ impl ProductionReplayRuntime {
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))
     }
 
-    pub(crate) fn set_microphone_muted(&self, muted: bool) {
+    pub fn set_microphone_muted(&self, muted: bool) {
         lock_unpoisoned(&self.audio).microphone_muted = muted;
     }
 
@@ -478,11 +478,16 @@ impl ProductionReplayRuntime {
                 "Instant Replay is still buffering; wait at least one second before saving",
             ));
         }
-        let result = pipeline.save_spooled_replay_as_with_audio(duration, output_format, || {
-            lock_unpoisoned(&self.audio)
-                .buffer
-                .snapshot_between(0, u64::MAX)
-        });
+        let result =
+            pipeline.save_spooled_replay_as_with_audio_tracks(duration, output_format, || {
+                let audio = lock_unpoisoned(&self.audio);
+                crate::ReplayAudioTracks {
+                    system: audio.buffer.snapshot_between(0, u64::MAX),
+                    microphone: audio
+                        .microphone_recording
+                        .then(|| audio.microphone_buffer.snapshot_between(0, u64::MAX)),
+                }
+            });
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(state, completed).is_err() {
             mark_failed(state, &self.audio, ReplayFailure::EncoderFailed);

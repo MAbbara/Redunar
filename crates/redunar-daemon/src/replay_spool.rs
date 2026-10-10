@@ -390,15 +390,18 @@ impl ReplaySegmentSpool {
         stream: ReplayVideoStream,
         store: ReplayClipStore,
     ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
-        self.save_async_as(
+        self.save_async_tracks_as(
             requested,
             settings,
             stream,
             store,
             ReplayOutputFormat::Matroska,
-            crate::ReplayAudioSnapshot {
-                stream: redunar_capture_audio::OpusStreamDescription::default(),
-                packets: Vec::new(),
+            crate::ReplayAudioTracks {
+                system: crate::ReplayAudioSnapshot {
+                    stream: redunar_capture_audio::OpusStreamDescription::default(),
+                    packets: Vec::new(),
+                },
+                microphone: None,
             },
         )
     }
@@ -412,11 +415,33 @@ impl ReplaySegmentSpool {
     pub fn save_async_as(
         &self,
         requested: ReplayDuration,
-        mut settings: ReplaySettings,
+        settings: ReplaySettings,
         stream: ReplayVideoStream,
         store: ReplayClipStore,
         output_format: ReplayOutputFormat,
         audio: crate::ReplayAudioSnapshot,
+    ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
+        self.save_async_tracks_as(
+            requested,
+            settings,
+            stream,
+            store,
+            output_format,
+            crate::ReplayAudioTracks {
+                system: audio,
+                microphone: None,
+            },
+        )
+    }
+
+    pub fn save_async_tracks_as(
+        &self,
+        requested: ReplayDuration,
+        mut settings: ReplaySettings,
+        stream: ReplayVideoStream,
+        store: ReplayClipStore,
+        output_format: ReplayOutputFormat,
+        audio: crate::ReplayAudioTracks,
     ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
         let cancel = Arc::new(AtomicBool::new(false));
         if requested.seconds() > RETAINED_DURATION.seconds()
@@ -622,7 +647,7 @@ fn assemble_snapshot(
     stream: &ReplayVideoStream,
     store: &ReplayClipStore,
     output_format: ReplayOutputFormat,
-    audio: &crate::ReplayAudioSnapshot,
+    audio: &crate::ReplayAudioTracks,
     cancel: Arc<AtomicBool>,
 ) -> Result<StoredReplayClip, ReplaySpoolError> {
     let mut packets = crate::replay_spool_reader::SpoolPackets::scan(segments, settings, cancel)
@@ -646,7 +671,7 @@ fn assemble_snapshot(
             ))
         })?;
     requested_store
-        .save_streaming(stream, &mut packets, audio, output_format)
+        .save_streaming_tracks(stream, &mut packets, audio, output_format)
         .map_err(|error| {
             ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
         })

@@ -89,7 +89,9 @@ pub use replay::{
     begin_save as begin_replay_save, complete_save as complete_replay_save, fail as fail_replay,
     request_start as request_replay_start, stop as stop_replay,
 };
-pub use replay_audio::{ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot};
+pub use replay_audio::{
+    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks,
+};
 pub use replay_diagnostics::{
     ReplayFoundationSelfTestError, ReplayFoundationSelfTestReport, ReplayFoundationSelfTestStage,
     run_replay_foundation_self_test,
@@ -102,9 +104,13 @@ pub use replay_encoder::{
 };
 pub use replay_h264::{H264ParameterSets, h264_annex_b_access_unit};
 pub use replay_matroska::{
-    MatroskaVideoError, MatroskaVideoSummary, write_audio_video_matroska, write_video_only_matroska,
+    MatroskaVideoError, MatroskaVideoSummary, write_audio_video_matroska,
+    write_audio_video_matroska_tracks, write_video_only_matroska,
 };
-pub use replay_mp4::{Mp4VideoError, Mp4VideoSummary, write_audio_video_mp4, write_video_only_mp4};
+pub use replay_mp4::{
+    Mp4VideoError, Mp4VideoSummary, write_audio_video_mp4, write_audio_video_mp4_tracks,
+    write_video_only_mp4,
+};
 pub use replay_pipeline::{ReplayHardwarePipeline, ReplayPipelineError, ReplayPipelinePhase};
 pub use replay_preferences::{
     MAX_REPLAY_SHORTCUTS, MicrophoneMode, ReplayOutputFormat, ReplayPreferences,

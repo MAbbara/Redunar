@@ -1,7 +1,7 @@
 use crate::{
-    ReplayAudioSnapshot, ReplayBudget, ReplayOutputFormat, ReplayRing, ReplayVideoStream,
-    write_audio_video_matroska, write_audio_video_mp4, write_video_only_matroska,
-    write_video_only_mp4,
+    ReplayAudioSnapshot, ReplayAudioTracks, ReplayBudget, ReplayOutputFormat, ReplayRing,
+    ReplayVideoStream, write_audio_video_matroska_tracks, write_audio_video_mp4_tracks,
+    write_video_only_matroska, write_video_only_mp4,
 };
 use nix::sys::statvfs::statvfs;
 use std::error::Error;
@@ -334,6 +334,20 @@ impl ReplayClipStore {
         audio: &ReplayAudioSnapshot,
         output_format: ReplayOutputFormat,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
+        let tracks = ReplayAudioTracks {
+            system: audio.clone(),
+            microphone: None,
+        };
+        self.save_with_audio_tracks_as(stream, ring, &tracks, output_format)
+    }
+
+    pub fn save_with_audio_tracks_as(
+        &self,
+        stream: &ReplayVideoStream,
+        ring: &ReplayRing,
+        audio: &ReplayAudioTracks,
+        output_format: ReplayOutputFormat,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
         let Some(first_video) = ring.packets().next() else {
             return self.save_video_only_as(stream, ring, output_format);
         };
@@ -342,11 +356,15 @@ impl ReplayClipStore {
         let video_end = last_video
             .timestamp_ns()
             .saturating_add(last_video.duration_ns());
-        if !audio
-            .packets
-            .iter()
-            .any(|packet| packet.timestamp_ns >= video_start && packet.timestamp_ns < video_end)
-        {
+        let has_audio =
+            audio.system.packets.iter().any(|packet| {
+                packet.timestamp_ns >= video_start && packet.timestamp_ns < video_end
+            }) || audio.microphone.as_ref().is_some_and(|track| {
+                track.packets.iter().any(|packet| {
+                    packet.timestamp_ns >= video_start && packet.timestamp_ns < video_end
+                })
+            });
+        if !has_audio {
             // Out-of-window audio must not create an empty track.
             return self.save_video_only_as(stream, ring, output_format);
         }
@@ -355,7 +373,7 @@ impl ReplayClipStore {
             let mut bounded = BoundedClipWriter::new(temporary, hard_limit);
             match output_format {
                 ReplayOutputFormat::Matroska => {
-                    write_audio_video_matroska(&mut bounded, stream, ring, audio)
+                    write_audio_video_matroska_tracks(&mut bounded, stream, ring, audio)
                         .map(|summary| summary.bytes_written)
                         .map_err(|error| {
                             ReplayStoreError::owned(format!(
@@ -363,15 +381,29 @@ impl ReplayClipStore {
                             ))
                         })
                 }
-                ReplayOutputFormat::Mp4 => write_audio_video_mp4(&mut bounded, stream, ring, audio)
-                    .map(|summary| summary.bytes_written)
-                    .map_err(|error| {
-                        ReplayStoreError::owned(format!(
-                            "could not finalize audio/video MP4 replay: {error}"
-                        ))
-                    }),
+                ReplayOutputFormat::Mp4 => {
+                    write_audio_video_mp4_tracks(&mut bounded, stream, ring, audio)
+                        .map(|summary| summary.bytes_written)
+                        .map_err(|error| {
+                            ReplayStoreError::owned(format!(
+                                "could not finalize audio/video MP4 replay: {error}"
+                            ))
+                        })
+                }
             }
         })
+    }
+
+    pub(crate) fn save_streaming_tracks(
+        &self,
+        stream: &ReplayVideoStream,
+        source: &mut impl crate::replay_packet_source::ReplayPacketSource,
+        audio: &ReplayAudioTracks,
+        output_format: ReplayOutputFormat,
+    ) -> Result<StoredReplayClip, ReplayStoreError> {
+        // Streaming muxers currently share the established one-track packet
+        // source; retain system audio until their multi-track variant lands.
+        self.save_streaming(stream, source, &audio.system, output_format)
     }
 
     pub(crate) fn save_streaming(
