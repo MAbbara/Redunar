@@ -1,9 +1,9 @@
 use crate::replay_encoder::MAX_HARDWARE_INPUTS_IN_FLIGHT;
 use crate::{
     DmaBufReplayFrame, HardwareEncoderApi, HardwareEncoderBackend, ReplayAssemblyJob,
-    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayClipStore, ReplayEncoderError,
-    ReplayOutputFormat, ReplayPacketFlow, ReplayPacketFlowPhase, ReplayRingStats,
-    ReplaySegmentSpool, ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats,
+    ReplayAudioBuffer, ReplayAudioError, ReplayAudioSnapshot, ReplayAudioTracks, ReplayClipStore,
+    ReplayEncoderError, ReplayOutputFormat, ReplayPacketFlow, ReplayPacketFlowPhase,
+    ReplayRingStats, ReplaySegmentSpool, ReplaySpoolError, ReplaySpoolPhase, ReplaySpoolStats,
     ReplaySpoolSubmitError, ReplayStoreError, ReplayVideoStream, StoredReplayClip,
 };
 use redunar_core::{ReplayDuration, ReplayFrameRate, ReplaySettings};
@@ -384,6 +384,20 @@ impl ReplayHardwarePipeline {
         output_format: ReplayOutputFormat,
         audio_snapshot: impl FnOnce() -> ReplayAudioSnapshot,
     ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
+        self.save_spooled_replay_as_with_audio_tracks(duration, output_format, || {
+            ReplayAudioTracks {
+                system: audio_snapshot(),
+                microphone: None,
+            }
+        })
+    }
+
+    pub(crate) fn save_spooled_replay_as_with_audio_tracks(
+        &mut self,
+        duration: ReplayDuration,
+        output_format: ReplayOutputFormat,
+        audio_snapshot: impl FnOnce() -> ReplayAudioTracks,
+    ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
         if self.phase != ReplayPipelinePhase::Buffering {
             return Err(ReplayPipelineError::InvalidLifecycle);
         }
@@ -411,7 +425,7 @@ impl ReplayHardwarePipeline {
         // startup fails. The next frame must still resume at a keyframe.
         self.last_keyframe_request_timestamp_ns = None;
         let job = spool
-            .save_async_as(
+            .save_async_tracks_as(
                 duration,
                 self.settings,
                 self.flow.stream().clone(),

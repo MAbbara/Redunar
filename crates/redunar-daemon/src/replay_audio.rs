@@ -33,6 +33,13 @@ pub struct ReplayAudioSnapshot {
     pub packets: Vec<EncodedOpusPacket>,
 }
 
+/// Independent optional audio tracks retained for one replay save.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplayAudioTracks {
+    pub system: ReplayAudioSnapshot,
+    pub microphone: Option<ReplayAudioSnapshot>,
+}
+
 pub struct ReplayAudioBuffer {
     stream: OpusStreamDescription,
     duration_ns: u64,

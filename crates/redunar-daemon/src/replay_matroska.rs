@@ -1,4 +1,6 @@
-use crate::{EncodedReplayPacket, ReplayAudioSnapshot, ReplayRing, ReplayVideoStream};
+use crate::{
+    EncodedReplayPacket, ReplayAudioSnapshot, ReplayAudioTracks, ReplayRing, ReplayVideoStream,
+};
 use redunar_capture_audio::EncodedOpusPacket;
 use std::error::Error;
 use std::fmt;
@@ -43,7 +45,7 @@ pub(crate) fn write_streaming_matroska(
     if audio_packets.is_empty() {
         write_tracks(&mut output, stream)?;
     } else {
-        write_audio_video_tracks(&mut output, stream, audio)?;
+        write_audio_video_tracks(&mut output, stream, audio, None)?;
     }
     let mut cluster = None;
     let mut next_audio = 0;
@@ -61,7 +63,7 @@ pub(crate) fn write_streaming_matroska(
         {
             write_streaming_block(
                 &mut output,
-                MatroskaBlock::Audio(audio_packets[next_audio]),
+                MatroskaBlock::Audio(audio_packets[next_audio], 2),
                 origin,
                 &mut cluster,
             )?;
@@ -81,7 +83,7 @@ pub(crate) fn write_streaming_matroska(
         source.check_cancel()?;
         write_streaming_block(
             &mut output,
-            MatroskaBlock::Audio(packet),
+            MatroskaBlock::Audio(packet, 2),
             origin,
             &mut cluster,
         )?;
@@ -95,7 +97,7 @@ fn write_streaming_block(
     origin: u64,
     cluster: &mut Option<u64>,
 ) -> Result<(), MatroskaVideoError> {
-    if let MatroskaBlock::Audio(packet) = block
+    if let MatroskaBlock::Audio(packet, 2) = block
         && (packet.bytes.is_empty()
             || packet.bytes.len() > 4096
             || packet.duration_ns == 0
@@ -251,6 +253,20 @@ pub fn write_audio_video_matroska(
     ring: &ReplayRing,
     audio: &ReplayAudioSnapshot,
 ) -> Result<MatroskaVideoSummary, MatroskaVideoError> {
+    let tracks = ReplayAudioTracks {
+        system: audio.clone(),
+        microphone: None,
+    };
+    write_audio_video_matroska_tracks(destination, stream, ring, &tracks)
+}
+
+/// Write a Matroska stream with optional independent microphone audio.
+pub fn write_audio_video_matroska_tracks(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    ring: &ReplayRing,
+    audio: &ReplayAudioTracks,
+) -> Result<MatroskaVideoSummary, MatroskaVideoError> {
     let video = ring.packets().collect::<Vec<_>>();
     let first = video.first().ok_or(MatroskaVideoError::EmptyRing)?;
     if !first.is_keyframe() {
@@ -267,19 +283,37 @@ pub fn write_audio_video_matroska(
         .ok_or(MatroskaVideoError::TimestampOverflow)?;
     let origin_ns = first.timestamp_ns();
     let audio_packets = audio
+        .system
         .packets
         .iter()
         .filter(|packet| packet.timestamp_ns >= origin_ns && packet.timestamp_ns < video_end)
         .collect::<Vec<_>>();
-    if audio_packets.iter().any(|packet| {
-        packet.bytes.is_empty()
-            || packet.bytes.len() > 4_096
-            || packet.duration_ns == 0
-            || packet
-                .timestamp_ns
-                .checked_add(packet.duration_ns)
-                .is_none()
-    }) {
+    let microphone_packets = audio
+        .microphone
+        .as_ref()
+        .map(|microphone| {
+            microphone
+                .packets
+                .iter()
+                .filter(|packet| {
+                    packet.timestamp_ns >= origin_ns && packet.timestamp_ns < video_end
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if audio_packets
+        .iter()
+        .chain(microphone_packets.iter())
+        .any(|packet| {
+            packet.bytes.is_empty()
+                || packet.bytes.len() > 4_096
+                || packet.duration_ns == 0
+                || packet
+                    .timestamp_ns
+                    .checked_add(packet.duration_ns)
+                    .is_none()
+        })
+    {
         return Err(MatroskaVideoError::InvalidPacket);
     }
 
@@ -287,7 +321,16 @@ pub fn write_audio_video_matroska(
         .iter()
         .copied()
         .map(MatroskaBlock::Video)
-        .chain(audio_packets.into_iter().map(MatroskaBlock::Audio))
+        .chain(
+            audio_packets
+                .into_iter()
+                .map(|packet| MatroskaBlock::Audio(packet, 2)),
+        )
+        .chain(
+            microphone_packets
+                .into_iter()
+                .map(|packet| MatroskaBlock::Audio(packet, 3)),
+        )
         .collect::<Vec<_>>();
     blocks.sort_by_key(MatroskaBlock::timestamp_ns);
 
@@ -296,7 +339,12 @@ pub fn write_audio_video_matroska(
     output.write_all(ID_SEGMENT)?;
     output.write_all(&[0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])?;
     write_info(&mut output, video_end.saturating_sub(origin_ns))?;
-    write_audio_video_tracks(&mut output, stream, audio)?;
+    write_audio_video_tracks(
+        &mut output,
+        stream,
+        &audio.system,
+        audio.microphone.as_ref(),
+    )?;
     let mut clusters = 0_u32;
     let mut start = 0_usize;
     while start < blocks.len() {
@@ -329,35 +377,35 @@ pub fn write_audio_video_matroska(
 #[derive(Clone, Copy)]
 enum MatroskaBlock<'a> {
     Video(&'a EncodedReplayPacket),
-    Audio(&'a EncodedOpusPacket),
+    Audio(&'a EncodedOpusPacket, u8),
 }
 
 impl MatroskaBlock<'_> {
     fn timestamp_ns(&self) -> u64 {
         match *self {
             Self::Video(packet) => packet.timestamp_ns(),
-            Self::Audio(packet) => packet.timestamp_ns,
+            Self::Audio(packet, _) => packet.timestamp_ns,
         }
     }
 
     fn bytes(&self) -> &[u8] {
         match *self {
             Self::Video(packet) => packet.bytes(),
-            Self::Audio(packet) => &packet.bytes,
+            Self::Audio(packet, _) => &packet.bytes,
         }
     }
 
     const fn track_byte(&self) -> u8 {
         match self {
             Self::Video(_) => 0x81,
-            Self::Audio(_) => 0x82,
+            Self::Audio(_, track) => 0x80 | *track,
         }
     }
 
     const fn flags(&self) -> u8 {
         match self {
             Self::Video(packet) if packet.is_keyframe() => 0x80,
-            Self::Audio(_) => 0x80,
+            Self::Audio(_, _) => 0x80,
             Self::Video(_) => 0,
         }
     }
@@ -367,6 +415,7 @@ fn write_audio_video_tracks(
     output: &mut impl Write,
     stream: &ReplayVideoStream,
     audio: &ReplayAudioSnapshot,
+    microphone: Option<&ReplayAudioSnapshot>,
 ) -> Result<(), MatroskaVideoError> {
     let mut video = Vec::new();
     append_unsigned(&mut video, &[0xb0], u64::from(stream.width()))?;
@@ -409,6 +458,30 @@ fn write_audio_video_tracks(
     let mut tracks = Vec::new();
     append_master(&mut tracks, &[0xae], &video_track)?;
     append_master(&mut tracks, &[0xae], &audio_track)?;
+    if let Some(microphone) = microphone {
+        let mut settings = Vec::new();
+        append_float(
+            &mut settings,
+            &[0xb5],
+            f64::from(microphone.stream.sample_rate),
+        )?;
+        append_unsigned(
+            &mut settings,
+            &[0x9f],
+            u64::from(microphone.stream.channels),
+        )?;
+        let mut track = Vec::new();
+        append_unsigned(&mut track, &[0xd7], 3)?;
+        append_unsigned(&mut track, &[0x73, 0xc5], 3)?;
+        append_unsigned(&mut track, &[0x83], 2)?;
+        append_unsigned(&mut track, &[0x9c], 0)?;
+        append_unsigned(&mut track, &[0x56, 0xaa], 6_500_000)?;
+        append_unsigned(&mut track, &[0x56, 0xbb], 80_000_000)?;
+        append_bytes(&mut track, &[0x86], b"A_OPUS")?;
+        append_bytes(&mut track, &[0x63, 0xa2], &microphone.stream.codec_private)?;
+        append_master(&mut track, &[0xe1], &settings)?;
+        append_master(&mut tracks, &[0xae], &track)?;
+    }
     write_element(output, ID_TRACKS, &tracks)
 }
 
@@ -818,6 +891,14 @@ mod tests {
         assert!(output.windows(6).any(|bytes| bytes == b"A_OPUS"));
         assert!(output.windows(8).any(|bytes| bytes == b"OpusHead"));
         assert!(output.windows(4).any(|bytes| bytes == [0x82, 0, 0, 0x80]));
+        let tracks = ReplayAudioTracks {
+            system: audio.clone(),
+            microphone: Some(audio.clone()),
+        };
+        let mut dual = Vec::new();
+        write_audio_video_matroska_tracks(&mut dual, &stream(), &ring, &tracks)
+            .expect("dual audio/video Matroska");
+        assert!(dual.windows(4).any(|bytes| bytes == [0x83, 0, 0, 0x80]));
         assert_eq!(summary.packets, 2);
     }
 

@@ -1,5 +1,6 @@
 use crate::{
-    EncodedReplayPacket, ReplayAudioSnapshot, ReplayRing, ReplayVideoCodec, ReplayVideoStream,
+    EncodedReplayPacket, ReplayAudioSnapshot, ReplayAudioTracks, ReplayRing, ReplayVideoCodec,
+    ReplayVideoStream,
 };
 use redunar_capture_audio::EncodedOpusPacket;
 use std::error::Error;
@@ -9,6 +10,7 @@ use std::io::{self, Write};
 const TIMESCALE: u32 = 1_000_000;
 const TRACK_ID: u32 = 1;
 const AUDIO_TRACK_ID: u32 = 2;
+const MICROPHONE_TRACK_ID: u32 = 3;
 const MAX_FRAGMENT_DURATION_NS: u64 = 30_000_000_000;
 const MAX_STREAM_FRAGMENT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -100,7 +102,13 @@ pub(crate) fn write_streaming_mp4(
             end += 1;
         }
         fragments += 1;
-        write_audio_fragment(&mut output, fragments, origin, &audio_packets[start..end])?;
+        write_audio_fragment(
+            &mut output,
+            fragments,
+            origin,
+            &audio_packets[start..end],
+            AUDIO_TRACK_ID,
+        )?;
         start = end;
     }
     Ok(output.written)
@@ -234,6 +242,20 @@ pub fn write_audio_video_mp4(
     ring: &ReplayRing,
     audio: &ReplayAudioSnapshot,
 ) -> Result<Mp4VideoSummary, Mp4VideoError> {
+    let tracks = ReplayAudioTracks {
+        system: audio.clone(),
+        microphone: None,
+    };
+    write_audio_video_mp4_tracks(destination, stream, ring, &tracks)
+}
+
+/// Write fragmented MP4 with independent system and optional microphone tracks.
+pub fn write_audio_video_mp4_tracks(
+    destination: &mut impl Write,
+    stream: &ReplayVideoStream,
+    ring: &ReplayRing,
+    audio: &ReplayAudioTracks,
+) -> Result<Mp4VideoSummary, Mp4VideoError> {
     if stream.codec() != ReplayVideoCodec::H264 {
         return Err(Mp4VideoError::UnsupportedCodec);
     }
@@ -253,19 +275,32 @@ pub fn write_audio_video_mp4(
         .and_then(|packet| packet.timestamp_ns().checked_add(packet.duration_ns()))
         .ok_or(Mp4VideoError::TimestampOverflow)?;
     let audio_packets = audio
+        .system
         .packets
         .iter()
         .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < video_end)
         .collect::<Vec<_>>();
+    let microphone_packets = audio
+        .microphone
+        .as_ref()
+        .map(|microphone| {
+            microphone
+                .packets
+                .iter()
+                .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < video_end)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     if audio_packets
         .iter()
+        .chain(microphone_packets.iter())
         .any(|packet| packet.bytes.is_empty() || packet.bytes.len() > 4_096)
     {
         return Err(Mp4VideoError::InvalidPacket);
     }
     let mut output = CountingWriter::new(destination);
     output.write_all(&ftyp()?)?;
-    output.write_all(&moov_with_audio(stream, audio)?)?;
+    output.write_all(&moov_with_audio_tracks(stream, audio)?)?;
     let mut fragments = 0_u32;
     let mut start = 0_usize;
     while start < packets.len() {
@@ -292,30 +327,20 @@ pub fn write_audio_video_mp4(
     // Each fragment has fixed 20 ms sample durations. Start a new fragment
     // after a capture gap so tfdt preserves the missing time instead of
     // collapsing the later sound toward the beginning of the clip.
-    let mut audio_start = 0;
-    while audio_start < audio_packets.len() {
-        let mut audio_end = audio_start + 1;
-        while audio_end < audio_packets.len() && audio_end - audio_start < 1_500 {
-            let previous = audio_packets[audio_end - 1];
-            let expected = previous.timestamp_ns.saturating_add(previous.duration_ns);
-            if audio_packets[audio_end]
-                .timestamp_ns
-                .saturating_sub(expected)
-                > 5_000_000
-            {
-                break;
-            }
-            audio_end += 1;
-        }
-        fragments = fragments.saturating_add(1);
-        write_audio_fragment(
-            &mut output,
-            fragments,
-            origin,
-            &audio_packets[audio_start..audio_end],
-        )?;
-        audio_start = audio_end;
-    }
+    write_audio_fragments(
+        &mut output,
+        &mut fragments,
+        origin,
+        &audio_packets,
+        AUDIO_TRACK_ID,
+    )?;
+    write_audio_fragments(
+        &mut output,
+        &mut fragments,
+        origin,
+        &microphone_packets,
+        MICROPHONE_TRACK_ID,
+    )?;
     Ok(Mp4VideoSummary {
         packets: u32::try_from(packets.len()).unwrap_or(u32::MAX),
         fragments,
@@ -328,22 +353,47 @@ fn moov_with_audio(
     stream: &ReplayVideoStream,
     audio: &ReplayAudioSnapshot,
 ) -> Result<Vec<u8>, Mp4VideoError> {
+    let tracks = ReplayAudioTracks {
+        system: audio.clone(),
+        microphone: None,
+    };
+    moov_with_audio_tracks(stream, &tracks)
+}
+
+fn moov_with_audio_tracks(
+    stream: &ReplayVideoStream,
+    audio: &ReplayAudioTracks,
+) -> Result<Vec<u8>, Mp4VideoError> {
     let mut contents = Vec::new();
     push_box(&mut contents, *b"mvhd", &mvhd_for_next_track(3))?;
     push_box(&mut contents, *b"trak", &trak(stream)?)?;
-    push_box(&mut contents, *b"trak", &audio_trak(audio)?)?;
+    push_box(
+        &mut contents,
+        *b"trak",
+        &audio_trak(&audio.system, AUDIO_TRACK_ID)?,
+    )?;
+    if let Some(microphone) = &audio.microphone {
+        push_box(
+            &mut contents,
+            *b"trak",
+            &audio_trak(microphone, MICROPHONE_TRACK_ID)?,
+        )?;
+    }
     let mut mvex = Vec::new();
     push_box(&mut mvex, *b"trex", &trex())?;
     push_box(&mut mvex, *b"trex", &trex_for(AUDIO_TRACK_ID))?;
+    if audio.microphone.is_some() {
+        push_box(&mut mvex, *b"trex", &trex_for(MICROPHONE_TRACK_ID))?;
+    }
     push_box(&mut contents, *b"mvex", &mvex)?;
     make_box(*b"moov", &contents)
 }
 
-fn audio_trak(audio: &ReplayAudioSnapshot) -> Result<Vec<u8>, Mp4VideoError> {
+fn audio_trak(audio: &ReplayAudioSnapshot, track_id: u32) -> Result<Vec<u8>, Mp4VideoError> {
     let mut contents = Vec::new();
     let mut tkhd = full_box(0, 7);
     tkhd.extend_from_slice(&[0; 8]);
-    put_u32(&mut tkhd, AUDIO_TRACK_ID);
+    put_u32(&mut tkhd, track_id);
     tkhd.extend_from_slice(&[0; 12]);
     put_u16(&mut tkhd, 0);
     put_u16(&mut tkhd, 0);
@@ -431,11 +481,37 @@ fn trex_for(track_id: u32) -> Vec<u8> {
     value
 }
 
+fn write_audio_fragments(
+    output: &mut impl Write,
+    fragments: &mut u32,
+    origin: u64,
+    packets: &[&EncodedOpusPacket],
+    track_id: u32,
+) -> Result<(), Mp4VideoError> {
+    let mut start = 0;
+    while start < packets.len() {
+        let mut end = start + 1;
+        while end < packets.len() && end - start < 1_500 {
+            let previous = packets[end - 1];
+            let expected = previous.timestamp_ns.saturating_add(previous.duration_ns);
+            if packets[end].timestamp_ns.saturating_sub(expected) > 5_000_000 {
+                break;
+            }
+            end += 1;
+        }
+        *fragments = fragments.saturating_add(1);
+        write_audio_fragment(output, *fragments, origin, &packets[start..end], track_id)?;
+        start = end;
+    }
+    Ok(())
+}
+
 fn write_audio_fragment(
     output: &mut impl Write,
     sequence: u32,
     origin_ns: u64,
     packets: &[&EncodedOpusPacket],
+    track_id: u32,
 ) -> Result<(), Mp4VideoError> {
     let base_time = packets[0]
         .timestamp_ns
@@ -443,10 +519,10 @@ fn write_audio_fragment(
         .and_then(|value| value.checked_mul(48_000))
         .map(|value| value / 1_000_000_000)
         .ok_or(Mp4VideoError::TimestampOverflow)?;
-    let provisional = audio_moof(sequence, base_time, packets, 0)?;
+    let provisional = audio_moof(sequence, base_time, packets, 0, track_id)?;
     let offset = i32::try_from(provisional.len().saturating_add(8))
         .map_err(|_| Mp4VideoError::ContainerTooLarge)?;
-    let moof = audio_moof(sequence, base_time, packets, offset)?;
+    let moof = audio_moof(sequence, base_time, packets, offset, track_id)?;
     output.write_all(&moof)?;
     let payload = packets
         .iter()
@@ -466,11 +542,12 @@ fn audio_moof(
     base_time: u64,
     packets: &[&EncodedOpusPacket],
     data_offset: i32,
+    track_id: u32,
 ) -> Result<Vec<u8>, Mp4VideoError> {
     let mut mfhd = full_box(0, 0);
     put_u32(&mut mfhd, sequence);
     let mut tfhd = full_box(0, 0x0002_0000);
-    put_u32(&mut tfhd, AUDIO_TRACK_ID);
+    put_u32(&mut tfhd, track_id);
     let mut tfdt = full_box(1, 0);
     put_u64(&mut tfdt, base_time);
     let mut trun = full_box(0, 0x0000_0301);
@@ -1015,6 +1092,14 @@ mod tests {
         for kind in [b"Opus", b"dOps", b"soun"] {
             assert!(output.windows(4).any(|window| window == kind));
         }
+        let tracks = ReplayAudioTracks {
+            system: audio.clone(),
+            microphone: Some(audio.clone()),
+        };
+        let mut dual = Vec::new();
+        write_audio_video_mp4_tracks(&mut dual, &stream(), &ring, &tracks)
+            .expect("dual audio/video MP4");
+        assert!(dual.windows(4).any(|window| window == [0, 0, 0, 3]));
         assert_eq!(summary.fragments, 2);
     }
 
