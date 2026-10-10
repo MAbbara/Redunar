@@ -401,9 +401,38 @@ impl ReplayClipStore {
         audio: &ReplayAudioTracks,
         output_format: ReplayOutputFormat,
     ) -> Result<StoredReplayClip, ReplayStoreError> {
-        // Streaming muxers currently share the established one-track packet
-        // source; retain system audio until their multi-track variant lands.
-        self.save_streaming(stream, source, &audio.system, output_format)
+        self.save_generated(output_format, false, |temporary| {
+            let mut bounded = BoundedClipWriter::new(
+                temporary,
+                self.maximum_clip_bytes.min(self.storage_limit_bytes),
+            );
+            match output_format {
+                ReplayOutputFormat::Matroska => {
+                    crate::replay_matroska::write_streaming_matroska_tracks(
+                        &mut bounded,
+                        stream,
+                        source,
+                        audio,
+                    )
+                    .map_err(|error| {
+                        ReplayStoreError::owned(format!(
+                            "could not finalize streamed Matroska replay: {error}"
+                        ))
+                    })
+                }
+                ReplayOutputFormat::Mp4 => crate::replay_mp4::write_streaming_mp4_tracks(
+                    &mut bounded,
+                    stream,
+                    source,
+                    audio,
+                )
+                .map_err(|error| {
+                    ReplayStoreError::owned(format!(
+                        "could not finalize streamed MP4 replay: {error}"
+                    ))
+                }),
+            }
+        })
     }
 
     pub(crate) fn save_streaming(
