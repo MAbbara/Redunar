@@ -236,22 +236,33 @@ fn replay_unavailable_copy(
 ) -> &'static str {
     use redunar_daemon::ReplaySourceRejection;
     match rejection {
-        Some(ReplaySourceRejection::DimensionsUnsupported) =>
-            "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate.",
-        Some(ReplaySourceRejection::PixelFormatUnsupported) =>
-            "This game's pixel format cannot be recorded. Try a standard 8-bit display mode.",
-        Some(ReplaySourceRejection::ExternalMemoryUnsupported) =>
-            "This OpenGL driver cannot share Replay frames with the encoder. Check graphics driver support.",
-        Some(ReplaySourceRejection::GpuIdentityUnavailable) =>
-            "Replay could not identify the GPU used by this game. Check graphics driver support and relaunch the game.",
-        Some(ReplaySourceRejection::EncoderBackendUnavailable | ReplaySourceRejection::VideoEncodeUnsupported) =>
-            "The hardware video encoder is unavailable. Check Replay hardware support.",
-        Some(ReplaySourceRejection::ProtectedSwapchain) =>
-            "This game's protected display cannot be recorded.",
-        Some(ReplaySourceRejection::TransferSourceUsageMissing | ReplaySourceRejection::ArrayLayersUnsupported | ReplaySourceRejection::InvalidStructure) =>
-            "This game's graphics surface cannot be recorded. Try another display mode.",
-        None if active_game && phase == redunar_daemon::ReplayPhase::Unavailable =>
-            "Replay hardware is unavailable for this session. Check GPU and driver support; metrics remain available.",
+        Some(ReplaySourceRejection::DimensionsUnsupported) => {
+            "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate."
+        }
+        Some(ReplaySourceRejection::PixelFormatUnsupported) => {
+            "This game's pixel format cannot be recorded. Try a standard 8-bit display mode."
+        }
+        Some(ReplaySourceRejection::ExternalMemoryUnsupported) => {
+            "This OpenGL driver cannot share Replay frames with the encoder. Check graphics driver support."
+        }
+        Some(ReplaySourceRejection::GpuIdentityUnavailable) => {
+            "Replay could not identify the GPU used by this game. Check graphics driver support and relaunch the game."
+        }
+        Some(
+            ReplaySourceRejection::EncoderBackendUnavailable
+            | ReplaySourceRejection::VideoEncodeUnsupported,
+        ) => "The hardware video encoder is unavailable. Check Replay hardware support.",
+        Some(ReplaySourceRejection::ProtectedSwapchain) => {
+            "This game's protected display cannot be recorded."
+        }
+        Some(
+            ReplaySourceRejection::TransferSourceUsageMissing
+            | ReplaySourceRejection::ArrayLayersUnsupported
+            | ReplaySourceRejection::InvalidStructure,
+        ) => "This game's graphics surface cannot be recorded. Try another display mode.",
+        None if active_game && phase == redunar_daemon::ReplayPhase::Unavailable => {
+            "Replay hardware is unavailable for this session. Check GPU and driver support; metrics remain available."
+        }
         None => "Launch a supported game through Redunar to start Replay.",
     }
 }
@@ -293,7 +304,9 @@ mod replay_copy_tests {
 
     #[test]
     fn container_failure_is_not_reported_as_an_encoder_failure() {
-        assert!(super::replay_failure_copy(ReplayFailure::EncoderFailed).contains("encoder failed"));
+        assert!(
+            super::replay_failure_copy(ReplayFailure::EncoderFailed).contains("encoder failed")
+        );
         let packaging = super::replay_failure_copy(ReplayFailure::ContainerFailed);
         assert!(packaging.contains("package the recorded video"));
         assert!(!packaging.contains("encoder"));
@@ -301,10 +314,14 @@ mod replay_copy_tests {
 
     #[test]
     fn rejected_dimensions_explain_resolution_and_rate() {
-        assert_eq!(super::replay_unavailable_copy(
-            Some(redunar_daemon::ReplaySourceRejection::DimensionsUnsupported),
-            true, redunar_daemon::ReplayPhase::Unavailable,
-        ), "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate.");
+        assert_eq!(
+            super::replay_unavailable_copy(
+                Some(redunar_daemon::ReplaySourceRejection::DimensionsUnsupported),
+                true,
+                redunar_daemon::ReplayPhase::Unavailable,
+            ),
+            "This game resolution cannot be recorded at the selected frame rate. Lower the game's resolution or recording frame rate."
+        );
     }
 }
 
@@ -593,6 +610,8 @@ pub struct ReplayPreferencesDto {
     overlay_shortcut: String,
     close_overlay_on_outside_click: bool,
     initial_save_duration_seconds: u16,
+    microphone_mode: String,
+    microphone_source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -639,12 +658,52 @@ fn replay_preferences_dto() -> Result<ReplayPreferencesDto, String> {
         overlay_shortcut: preferences.overlay_shortcut,
         close_overlay_on_outside_click: preferences.close_overlay_on_outside_click,
         initial_save_duration_seconds: preferences.initial_save_duration.seconds(),
+        microphone_mode: match preferences.microphone {
+            redunar_daemon::MicrophoneMode::Off => "off",
+            redunar_daemon::MicrophoneMode::DefaultInput => "default",
+            redunar_daemon::MicrophoneMode::SelectedInput(_) => "selected",
+        }
+        .to_owned(),
+        microphone_source: match preferences.microphone {
+            redunar_daemon::MicrophoneMode::SelectedInput(source) => Some(source),
+            _ => None,
+        },
     })
 }
 
 #[tauri::command]
 pub fn replay_preferences() -> Result<ReplayPreferencesDto, String> {
     replay_preferences_dto()
+}
+
+#[tauri::command]
+pub fn set_replay_microphone(
+    mode: String,
+    source: Option<String>,
+) -> Result<ReplayPreferencesDto, String> {
+    crate::backend::ensure_write_access()?;
+    let microphone = match mode.as_str() {
+        "off" => redunar_daemon::MicrophoneMode::Off,
+        "default" => redunar_daemon::MicrophoneMode::DefaultInput,
+        "selected" => redunar_daemon::MicrophoneMode::SelectedInput(
+            source.ok_or_else(|| "A microphone source is required".to_owned())?,
+        ),
+        _ => return Err("Unsupported microphone mode".to_owned()),
+    };
+    crate::backend::service()
+        .set_replay_microphone(microphone)
+        .map_err(|error| error.to_string())?;
+    replay_preferences_dto()
+}
+
+#[tauri::command]
+pub fn set_replay_microphone_mute(muted: bool) -> Result<(), String> {
+    crate::backend::ensure_write_access()?;
+    crate::backend::service()
+        .game_session_coordinator()
+        .replay_runtime()
+        .set_microphone_muted(muted);
+    Ok(())
 }
 
 #[tauri::command]
