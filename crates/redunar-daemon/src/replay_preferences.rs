@@ -18,6 +18,7 @@ const PREFERENCES_HEADER_V3: &str = "redunar-replay-preferences-v3";
 const PREFERENCES_HEADER_V4: &str = "redunar-replay-preferences-v4";
 const PREFERENCES_HEADER_V5: &str = "redunar-replay-preferences-v5";
 const PREFERENCES_HEADER_V6: &str = "redunar-replay-preferences-v6";
+const PREFERENCES_HEADER_V7: &str = "redunar-replay-preferences-v7";
 const DEFAULT_SHORTCUT: &str = "F8";
 const DEFAULT_OVERLAY_SHORTCUT: &str = "Shift+Tab";
 const REPLAY_DIRECTORY_NAME: &str = "Redunar Replays";
@@ -37,6 +38,19 @@ pub(crate) fn saved_preferences_exist(state_directory: &Path) -> bool {
 pub struct ReplayShortcutBinding {
     pub shortcut: String,
     pub duration: ReplayDuration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MicrophoneMode {
+    Off,
+    DefaultInput,
+    SelectedInput(String),
+}
+
+impl Default for MicrophoneMode {
+    fn default() -> Self {
+        Self::Off
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -69,6 +83,7 @@ pub struct ReplayPreferences {
     /// Duration selected when the user opens the Replay save control.
     pub initial_save_duration: ReplayDuration,
     pub save_shortcuts: Vec<ReplayShortcutBinding>,
+    pub microphone: MicrophoneMode,
 }
 
 impl Default for ReplayPreferences {
@@ -83,6 +98,7 @@ impl Default for ReplayPreferences {
                 shortcut: DEFAULT_SHORTCUT.to_owned(),
                 duration: ReplayDuration::Seconds30,
             }],
+            microphone: MicrophoneMode::Off,
         }
     }
 }
@@ -199,6 +215,18 @@ pub(crate) fn set_outside_click(
     let _operation = lock_operations();
     let mut preferences = load_unlocked(state_directory)?;
     preferences.close_overlay_on_outside_click = enabled;
+    save_unlocked(state_directory, &preferences)?;
+    Ok(preferences)
+}
+
+pub(crate) fn set_microphone(
+    state_directory: &Path,
+    microphone: MicrophoneMode,
+) -> Result<ReplayPreferences, ReplayPreferencesError> {
+    validate_microphone(&microphone)?;
+    let _operation = lock_operations();
+    let mut preferences = load_unlocked(state_directory)?;
+    preferences.microphone = microphone;
     save_unlocked(state_directory, &preferences)?;
     Ok(preferences)
 }
@@ -340,11 +368,12 @@ fn serialize(preferences: &ReplayPreferences) -> String {
         |path| hex(path.as_os_str().as_bytes()),
     );
     let mut output = format!(
-        "{PREFERENCES_HEADER_V6}\nsave-parent={parent}\noutput-format={}\noverlay-shortcut={}\nclose-on-outside-click={}\ninitial-save-duration={}\nbinding-count={}\n",
+        "{PREFERENCES_HEADER_V7}\nsave-parent={parent}\noutput-format={}\noverlay-shortcut={}\nclose-on-outside-click={}\ninitial-save-duration={}\nmicrophone={}\nbinding-count={}\n",
         output_format_token(preferences.output_format),
         preferences.overlay_shortcut,
         preferences.close_overlay_on_outside_click,
         duration_token(preferences.initial_save_duration),
+        microphone_token(&preferences.microphone),
         preferences.save_shortcuts.len()
     );
     for binding in &preferences.save_shortcuts {
@@ -368,6 +397,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
             | PREFERENCES_HEADER_V4
             | PREFERENCES_HEADER_V5
             | PREFERENCES_HEADER_V6
+            | PREFERENCES_HEADER_V7
     ) {
         return Err("unsupported preferences version");
     }
@@ -389,6 +419,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
             | PREFERENCES_HEADER_V4
             | PREFERENCES_HEADER_V5
             | PREFERENCES_HEADER_V6
+            | PREFERENCES_HEADER_V7
     ) {
         parse_output_format(field(lines.next(), "output-format")?)?
     } else {
@@ -396,22 +427,33 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
     };
     let overlay_shortcut = if matches!(
         version,
-        PREFERENCES_HEADER_V4 | PREFERENCES_HEADER_V5 | PREFERENCES_HEADER_V6
+        PREFERENCES_HEADER_V4
+            | PREFERENCES_HEADER_V5
+            | PREFERENCES_HEADER_V6
+            | PREFERENCES_HEADER_V7
     ) {
         field(lines.next(), "overlay-shortcut")?.to_owned()
     } else {
         DEFAULT_OVERLAY_SHORTCUT.to_owned()
     };
-    let close_overlay_on_outside_click =
-        if matches!(version, PREFERENCES_HEADER_V5 | PREFERENCES_HEADER_V6) {
-            parse_bool(field(lines.next(), "close-on-outside-click")?)?
-        } else {
-            true
-        };
-    let initial_save_duration = if version == PREFERENCES_HEADER_V6 {
+    let close_overlay_on_outside_click = if matches!(
+        version,
+        PREFERENCES_HEADER_V5 | PREFERENCES_HEADER_V6 | PREFERENCES_HEADER_V7
+    ) {
+        parse_bool(field(lines.next(), "close-on-outside-click")?)?
+    } else {
+        true
+    };
+    let initial_save_duration = if matches!(version, PREFERENCES_HEADER_V6 | PREFERENCES_HEADER_V7)
+    {
         parse_duration_token(field(lines.next(), "initial-save-duration")?)?
     } else {
         ReplayDuration::Seconds30
+    };
+    let microphone = if version == PREFERENCES_HEADER_V7 {
+        parse_microphone(field(lines.next(), "microphone")?)?
+    } else {
+        MicrophoneMode::Off
     };
     let save_shortcuts = if version == PREFERENCES_HEADER_V1 {
         let shortcut = field(lines.next(), "save-shortcut")?;
@@ -453,7 +495,40 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
         close_overlay_on_outside_click,
         initial_save_duration,
         save_shortcuts,
+        microphone,
     })
+}
+
+fn microphone_token(value: &MicrophoneMode) -> String {
+    match value {
+        MicrophoneMode::Off => "off".to_owned(),
+        MicrophoneMode::DefaultInput => "default".to_owned(),
+        MicrophoneMode::SelectedInput(name) => format!("selected:{}", hex(name.as_bytes())),
+    }
+}
+
+fn parse_microphone(value: &str) -> Result<MicrophoneMode, &'static str> {
+    match value {
+        "off" => Ok(MicrophoneMode::Off),
+        "default" => Ok(MicrophoneMode::DefaultInput),
+        value if value.starts_with("selected:") => {
+            let bytes = unhex(&value[9..])?;
+            let name = String::from_utf8(bytes).map_err(|_| "microphone source is invalid")?;
+            let mode = MicrophoneMode::SelectedInput(name);
+            validate_microphone(&mode).map_err(|_| "microphone source is invalid")?;
+            Ok(mode)
+        }
+        _ => Err("microphone mode is invalid"),
+    }
+}
+
+fn validate_microphone(value: &MicrophoneMode) -> Result<(), ReplayPreferencesError> {
+    if let MicrophoneMode::SelectedInput(name) = value
+        && (name.is_empty() || name.len() > 256 || name.chars().any(char::is_control))
+    {
+        return Err(ReplayPreferencesError::new("microphone source is invalid"));
+    }
+    Ok(())
 }
 
 fn parse_bool(value: &str) -> Result<bool, &'static str> {

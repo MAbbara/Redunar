@@ -107,8 +107,8 @@ pub use replay_matroska::{
 pub use replay_mp4::{Mp4VideoError, Mp4VideoSummary, write_audio_video_mp4, write_video_only_mp4};
 pub use replay_pipeline::{ReplayHardwarePipeline, ReplayPipelineError, ReplayPipelinePhase};
 pub use replay_preferences::{
-    MAX_REPLAY_SHORTCUTS, ReplayOutputFormat, ReplayPreferences, ReplayPreferencesError,
-    ReplayShortcutBinding,
+    MAX_REPLAY_SHORTCUTS, MicrophoneMode, ReplayOutputFormat, ReplayPreferences,
+    ReplayPreferencesError, ReplayShortcutBinding,
 };
 pub use replay_ring::{
     EncodedReplayPacket, ReplayPacketError, ReplayPushOutcome, ReplayRing, ReplayRingError,
@@ -999,6 +999,19 @@ impl RedunarService {
     ///
     /// Returns an error if the private Replay preferences cannot be loaded or
     /// replaced atomically.
+    /// Set microphone capture mode for future Replay sessions.
+    ///
+    /// Microphone capture is Off by default; changing this setting never
+    /// interrupts an active video or system-audio pipeline.
+    pub fn set_replay_microphone(
+        &self,
+        microphone: MicrophoneMode,
+    ) -> Result<ReplayPreferences, ReplayPreferencesError> {
+        let preferences = replay_preferences::set_microphone(&self.state_directory, microphone)?;
+        self.publish_replay_preferences(&preferences);
+        Ok(preferences)
+    }
+
     pub fn set_replay_output_format(
         &self,
         output_format: ReplayOutputFormat,
