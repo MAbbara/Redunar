@@ -109,6 +109,54 @@ pub fn discover_game_audio_node(
 ///
 /// Returns [`GameAudioNodeError`] when the registry is oversized, malformed,
 /// or a candidate sink has malformed metadata.
+/// Select one microphone source from PipeWire registry metadata.
+///
+/// A preferred node name is used when supplied; without one exactly one
+/// `Audio/Source` node must exist so Redunar never guesses a physical input.
+///
+/// # Errors
+///
+/// Returns [`GameAudioNodeError`] when registry metadata is oversized, malformed,
+/// or ambiguous.
+pub fn discover_microphone_node(
+    registry: &[u8],
+    preferred_node_name: Option<&str>,
+) -> Result<Option<GameAudioNode>, GameAudioNodeError> {
+    if registry.len() > MAX_REGISTRY_BYTES {
+        return Err(GameAudioNodeError::RegistryTooLarge);
+    }
+    let text = std::str::from_utf8(registry).map_err(|_| GameAudioNodeError::MalformedRegistry)?;
+    let mut sources = Vec::new();
+    for object in json_objects(text)? {
+        if !object.contains("\"PipeWire:Interface:Node\"")
+            || !property_equals(object, "media.class", "Audio/Source")
+        {
+            continue;
+        }
+        let serial =
+            property_u32(object, "object.serial").ok_or(GameAudioNodeError::MalformedRegistry)?;
+        let node_name =
+            property_string(object, "node.name").ok_or(GameAudioNodeError::MalformedRegistry)?;
+        if serial != 0 && !node_name.is_empty() && node_name.len() <= MAX_NODE_NAME_BYTES {
+            sources.push(GameAudioNode {
+                serial,
+                process_id: 0,
+                node_name,
+            });
+        }
+    }
+    sources.sort_by_key(|node| node.serial);
+    sources.dedup_by_key(|node| node.serial);
+    if let Some(preferred) = preferred_node_name {
+        return Ok(sources.into_iter().find(|node| node.node_name == preferred));
+    }
+    match sources.len() {
+        0 => Ok(None),
+        1 => Ok(sources.pop()),
+        _ => Err(GameAudioNodeError::Ambiguous),
+    }
+}
+
 pub fn discover_output_monitor_node(
     registry: &[u8],
     preferred_node_name: Option<&str>,
@@ -312,6 +360,32 @@ mod tests {
             .expect("registry")
             .expect("default sink");
         assert_eq!(selected.serial, 42);
+    }
+
+    #[test]
+    fn microphone_source_selects_named_input() {
+        let data = registry(&format!(
+            "{},{}",
+            node(41, 0, "Audio/Source"),
+            node(42, 0, "Audio/Source")
+        ));
+        let selected = discover_microphone_node(&data, Some("game-audio-42"))
+            .expect("registry")
+            .expect("microphone");
+        assert_eq!(selected.serial, 42);
+    }
+
+    #[test]
+    fn microphone_source_rejects_ambiguous_default() {
+        let data = registry(&format!(
+            "{},{}",
+            node(41, 0, "Audio/Source"),
+            node(42, 0, "Audio/Source")
+        ));
+        assert_eq!(
+            discover_microphone_node(&data, None),
+            Err(GameAudioNodeError::Ambiguous)
+        );
     }
 
     #[test]

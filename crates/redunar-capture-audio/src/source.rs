@@ -1,7 +1,7 @@
 use crate::{
     AUDIO_CHANNELS, AUDIO_FRAME_DURATION_NS, AUDIO_FRAME_SAMPLES_PER_CHANNEL,
     AUDIO_PCM_FRAME_BYTES, AUDIO_SAMPLE_RATE, EncodedOpusPacket, GameAudioNode, OpusEncoder,
-    discover_output_monitor_node,
+    discover_microphone_node, discover_output_monitor_node,
 };
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use std::error::Error;
@@ -64,6 +64,31 @@ impl fmt::Display for AudioCaptureError {
 
 impl Error for AudioCaptureError {}
 
+/// One exact microphone input route selected for Replay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MicrophoneAudioSource {
+    PipeWire(GameAudioNode),
+    PulseAudio { source_name: String },
+}
+
+impl MicrophoneAudioSource {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::PipeWire(node) => &node.node_name,
+            Self::PulseAudio { source_name } => source_name,
+        }
+    }
+
+    #[must_use]
+    pub const fn backend_name(&self) -> &'static str {
+        match self {
+            Self::PipeWire(_) => "PipeWire",
+            Self::PulseAudio { .. } => "PulseAudio input",
+        }
+    }
+}
+
 /// One exact default-output monitor selected for the Replay worker.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AudioCaptureSource {
@@ -99,6 +124,25 @@ impl AudioCaptureSource {
 ///
 /// Returns [`AudioCaptureError`] when neither supported sound server exposes a
 /// usable output route.
+/// Find available microphone input routes in preference order.
+///
+/// The native PipeWire route is preferred when exactly one usable default
+/// source is exposed; PulseAudio remains the compatibility fallback.
+#[must_use]
+pub fn discover_microphone_audio_sources() -> Vec<MicrophoneAudioSource> {
+    let mut sources = Vec::with_capacity(2);
+    if system_utility(PW_CAT_PATH, "pw-cat").is_some()
+        && let Ok(registry) = inspect_pipewire_registry()
+        && let Ok(Some(source)) = discover_microphone_node(&registry, None)
+    {
+        sources.push(MicrophoneAudioSource::PipeWire(source));
+    }
+    if let Some(source_name) = discover_pulse_default_source() {
+        sources.push(MicrophoneAudioSource::PulseAudio { source_name });
+    }
+    sources
+}
+
 pub fn discover_system_audio_source() -> Result<AudioCaptureSource, AudioCaptureError> {
     discover_system_audio_sources()?
         .into_iter()
@@ -261,6 +305,14 @@ fn read_discovery_output(
     }
 }
 
+fn discover_pulse_default_source() -> Option<String> {
+    let pactl = system_utility(PACTL_PATH, "pactl")?;
+    let output =
+        run_discovery_command(Command::new(pactl).args(["get-default-source"]), 4 * 1024).ok()?;
+    let value = std::str::from_utf8(&output).ok()?.trim();
+    valid_sink_name(value)
+}
+
 fn discover_pulse_default_monitor() -> Option<AudioCaptureSource> {
     system_utility(PAREC_PATH, "parec")?;
     let sink_name = inspect_pactl_default_sink_name()?;
@@ -362,7 +414,7 @@ fn system_utility(preferred: &str, name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-pub struct SystemAudioCapture {
+struct AudioCaptureStream {
     child: Child,
     stdout: ChildStdout,
     encoder: OpusEncoder,
@@ -373,21 +425,21 @@ pub struct SystemAudioCapture {
     next_timestamp_ns: Option<u64>,
 }
 
-impl SystemAudioCapture {
+impl AudioCaptureStream {
     /// Start one long-lived raw capture stream for the selected system route.
     ///
     /// # Errors
     ///
     /// Returns [`AudioCaptureError`] when the selected capture utility, its
     /// pipe, or `libopus` cannot be initialized.
-    pub fn start(
-        source: &AudioCaptureSource,
+    fn start_command(
+        mut command: Command,
+        description: &str,
         timeline_timestamp_ns: u64,
         timeline_started: Instant,
     ) -> Result<Self, AudioCaptureError> {
         let encoder =
             OpusEncoder::open().map_err(|error| AudioCaptureError::new(error.to_string()))?;
-        let mut command = capture_command(source)?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -411,14 +463,12 @@ impl SystemAudioCapture {
             }
         }
         let mut child = command.spawn().map_err(|error| {
-            AudioCaptureError::new(format!("could not start game audio capture: {error}"))
+            AudioCaptureError::new(format!("could not start {description} capture: {error}"))
         })?;
         let Some(stdout) = child.stdout.take() else {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AudioCaptureError::new(
-                "game audio capture pipe is unavailable",
-            ));
+            return Err(AudioCaptureError::new("audio capture pipe is unavailable"));
         };
         Ok(Self {
             child,
@@ -450,7 +500,7 @@ impl SystemAudioCapture {
                 .map_err(|error| AudioCaptureError::new(error.to_string()))?
                 .is_some()
             {
-                return Err(AudioCaptureError::new("game audio capture exited"));
+                return Err(AudioCaptureError::new("audio capture exited"));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -469,13 +519,9 @@ impl SystemAudioCapture {
             let count = self
                 .stdout
                 .read(&mut self.pcm[self.filled..])
-                .map_err(|error| {
-                    AudioCaptureError::new(format!("game audio read failed: {error}"))
-                })?;
+                .map_err(|error| AudioCaptureError::new(format!("audio read failed: {error}")))?;
             if count == 0 {
-                return Err(AudioCaptureError::new(
-                    "game audio capture closed its stream",
-                ));
+                return Err(AudioCaptureError::new("audio capture closed its stream"));
             }
             self.filled += count;
         }
@@ -513,10 +559,131 @@ impl SystemAudioCapture {
     }
 }
 
-impl Drop for SystemAudioCapture {
+/// Capture the selected system-output monitor.
+pub struct SystemAudioCapture {
+    inner: AudioCaptureStream,
+}
+
+impl SystemAudioCapture {
+    pub fn start(
+        source: &AudioCaptureSource,
+        timeline_timestamp_ns: u64,
+        timeline_started: Instant,
+    ) -> Result<Self, AudioCaptureError> {
+        Ok(Self {
+            inner: AudioCaptureStream::start_command(
+                capture_command(source)?,
+                "system audio",
+                timeline_timestamp_ns,
+                timeline_started,
+            )?,
+        })
+    }
+
+    pub fn next_packet(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<EncodedOpusPacket>, AudioCaptureError> {
+        self.inner.next_packet(timeout)
+    }
+}
+
+/// Capture one microphone input as a separate Opus timeline.
+pub struct MicrophoneAudioCapture {
+    inner: AudioCaptureStream,
+}
+
+impl MicrophoneAudioCapture {
+    pub fn start(
+        source: &MicrophoneAudioSource,
+        timeline_timestamp_ns: u64,
+        timeline_started: Instant,
+    ) -> Result<Self, AudioCaptureError> {
+        Ok(Self {
+            inner: AudioCaptureStream::start_command(
+                microphone_capture_command(source)?,
+                "microphone",
+                timeline_timestamp_ns,
+                timeline_started,
+            )?,
+        })
+    }
+
+    pub fn next_packet(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<EncodedOpusPacket>, AudioCaptureError> {
+        self.inner.next_packet(timeout)
+    }
+}
+
+impl Drop for AudioCaptureStream {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn microphone_capture_command(
+    source: &MicrophoneAudioSource,
+) -> Result<Command, AudioCaptureError> {
+    match source {
+        MicrophoneAudioSource::PipeWire(node) => {
+            let Some(pw_cat) = system_utility(PW_CAT_PATH, "pw-cat") else {
+                return Err(AudioCaptureError::new(
+                    "PipeWire audio capture utility is unavailable",
+                ));
+            };
+            if node.serial == 0 {
+                return Err(AudioCaptureError::new(
+                    "PipeWire microphone target is invalid",
+                ));
+            }
+            let mut command = Command::new(pw_cat);
+            command.args([
+                "--record",
+                "--raw",
+                "--rate",
+                &AUDIO_SAMPLE_RATE.to_string(),
+                "--channels",
+                &AUDIO_CHANNELS.to_string(),
+                "--format",
+                "s16",
+                "--latency",
+                "20ms",
+                "--target",
+                &node.serial.to_string(),
+                "-",
+            ]);
+            Ok(command)
+        }
+        MicrophoneAudioSource::PulseAudio { source_name } => {
+            let Some(parec) = system_utility(PAREC_PATH, "parec") else {
+                return Err(AudioCaptureError::new(
+                    "PulseAudio audio capture utility is unavailable",
+                ));
+            };
+            if source_name.is_empty() || source_name.len() > 256 {
+                return Err(AudioCaptureError::new(
+                    "PulseAudio microphone source is invalid",
+                ));
+            }
+            let mut command = Command::new(parec);
+            command.args([
+                "--raw",
+                "--rate",
+                &AUDIO_SAMPLE_RATE.to_string(),
+                "--channels",
+                &AUDIO_CHANNELS.to_string(),
+                "--format",
+                "s16le",
+                "--latency-msec",
+                "20",
+                "--device",
+                source_name,
+            ]);
+            Ok(command)
+        }
     }
 }
 

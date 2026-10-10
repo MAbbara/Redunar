@@ -1,4 +1,4 @@
-//! Bounded system-output audio capture for Instant Replay.
+//! Bounded system-output and microphone audio capture for Instant Replay.
 //!
 //! Redunar records the default output monitor: the same mixed system audio the
 //! user hears. It uses `PulseAudio` (including `PipeWire`'s Pulse server) when
@@ -10,11 +10,13 @@ mod opus;
 mod source;
 
 pub use node::{
-    GameAudioNode, GameAudioNodeError, discover_game_audio_node, discover_output_monitor_node,
+    GameAudioNode, GameAudioNodeError, discover_game_audio_node, discover_microphone_node,
+    discover_output_monitor_node,
 };
 pub use opus::{EncodedOpusPacket, OpusEncoder, OpusEncoderError, OpusStreamDescription};
 pub use source::{
-    AudioCaptureError, AudioCaptureSource, SystemAudioCapture, discover_system_audio_source,
+    AudioCaptureError, AudioCaptureSource, MicrophoneAudioCapture, MicrophoneAudioSource,
+    SystemAudioCapture, discover_microphone_audio_sources, discover_system_audio_source,
     discover_system_audio_sources, monotonic_now_ns,
 };
 
