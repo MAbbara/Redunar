@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.21" date="2026-10-11">
+      <description>
+        <p>Fixes Steam Play launches on X11, adds optional microphone recording mixed with game sound in Replay clips, and reduces replay gaps caused by short encoder bursts overflowing the recording queue.</p>
+      </description>
+    </release>
     <release version="0.1.20" date="2026-10-09">
       <description>
         <p>Keeps Replay save controls aligned when changing duration, distinguishes pending frames from errors, and fixes incomplete Vulkan extension discovery for the NVIDIA beta encoder.</p>

@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.20
+Version:        0.1.21
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,11 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Sun Oct 11 2026 Redunar <local@redunar.invalid> - 0.1.21-1.local
+- Fix Steam Play launches on X11 while preserving native capture.
+- Add optional microphone recording mixed with game sound in Replay clips.
+- Reduce replay gaps caused by short encoder bursts overflowing the recording queue.
+
 * Fri Oct 09 2026 Redunar <local@redunar.invalid> - 0.1.20-1.local
 - Keep Replay save controls aligned across durations and distinguish pending frames from errors
 - Complete bounded Vulkan extension discovery for capture and the NVIDIA beta encoder
