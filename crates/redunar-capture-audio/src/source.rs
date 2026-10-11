@@ -126,8 +126,8 @@ impl AudioCaptureSource {
 /// usable output route.
 /// Find available microphone input routes in preference order.
 ///
-/// The native PipeWire route is preferred when exactly one usable default
-/// source is exposed; PulseAudio remains the compatibility fallback.
+/// The native `PipeWire` route is preferred when exactly one usable default
+/// source is exposed; `PulseAudio` remains the compatibility fallback.
 #[must_use]
 pub fn discover_microphone_audio_sources() -> Vec<MicrophoneAudioSource> {
     let mut sources = Vec::with_capacity(2);
@@ -143,6 +143,11 @@ pub fn discover_microphone_audio_sources() -> Vec<MicrophoneAudioSource> {
     sources
 }
 
+/// Discover the first usable system-output capture route.
+///
+/// # Errors
+///
+/// Returns [`AudioCaptureError`] when no supported output route is available.
 pub fn discover_system_audio_source() -> Result<AudioCaptureSource, AudioCaptureError> {
     discover_system_audio_sources()?
         .into_iter()
@@ -526,7 +531,9 @@ impl AudioCaptureStream {
             self.filled += count;
         }
         let mut samples = [0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS as usize];
-        for (sample, bytes) in samples.iter_mut().zip(self.pcm.chunks_exact(2)) {
+        let (pcm_chunks, remainder) = self.pcm.as_chunks::<2>();
+        debug_assert!(remainder.is_empty());
+        for (sample, bytes) in samples.iter_mut().zip(pcm_chunks) {
             *sample = i16::from_le_bytes([bytes[0], bytes[1]]);
         }
         let live_timestamp_ns = self
@@ -565,6 +572,12 @@ pub struct SystemAudioCapture {
 }
 
 impl SystemAudioCapture {
+    /// Start capturing from the selected system-output route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when the capture command or Opus encoder
+    /// cannot be initialized.
     pub fn start(
         source: &AudioCaptureSource,
         timeline_timestamp_ns: u64,
@@ -580,6 +593,11 @@ impl SystemAudioCapture {
         })
     }
 
+    /// Read and encode at most one packet within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when the capture stream or encoder fails.
     pub fn next_packet(
         &mut self,
         timeout: Duration,
@@ -594,6 +612,12 @@ pub struct MicrophoneAudioCapture {
 }
 
 impl MicrophoneAudioCapture {
+    /// Start capturing from the selected microphone route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when the capture command or Opus encoder
+    /// cannot be initialized.
     pub fn start(
         source: &MicrophoneAudioSource,
         timeline_timestamp_ns: u64,
@@ -609,6 +633,11 @@ impl MicrophoneAudioCapture {
         })
     }
 
+    /// Read and encode at most one packet within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioCaptureError`] when the capture stream or encoder fails.
     pub fn next_packet(
         &mut self,
         timeout: Duration,

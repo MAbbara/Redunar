@@ -62,9 +62,8 @@ pub(crate) fn mix_audio_tracks(tracks: ReplayAudioTracks) -> ReplayAudioTracks {
                 .map(|pcm| (packet.timestamp_ns, pcm))
         })
         .collect::<Vec<_>>();
-    let mut encoder = match redunar_capture_audio::OpusEncoder::open() {
-        Ok(encoder) => encoder,
-        Err(_) => return tracks,
+    let Ok(mut encoder) = redunar_capture_audio::OpusEncoder::open() else {
+        return tracks;
     };
     let mut mixed = Vec::with_capacity(tracks.system.packets.len());
     for packet in &tracks.system.packets {
@@ -77,14 +76,14 @@ pub(crate) fn mix_audio_tracks(tracks: ReplayAudioTracks) -> ReplayAudioTracks {
             && packet.timestamp_ns.abs_diff(*microphone_timestamp) <= packet.duration_ns
         {
             for (system, microphone) in pcm.iter_mut().zip(mic_samples.iter()) {
-                *system = ((*system as i32 + *microphone as i32) / 2)
-                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                *system = i16::try_from(i32::midpoint(i32::from(*system), i32::from(*microphone)))
+                    .expect("the midpoint of two i16 values fits in i16");
             }
         }
-        let Ok(encoded) = encoder.encode_frame(packet.timestamp_ns, &pcm) else {
+        let Ok(mixed_packet) = encoder.encode_frame(packet.timestamp_ns, &pcm) else {
             return tracks;
         };
-        mixed.push(encoded);
+        mixed.push(mixed_packet);
     }
     ReplayAudioTracks {
         system: ReplayAudioSnapshot {

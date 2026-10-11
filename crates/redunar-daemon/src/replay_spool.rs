@@ -434,6 +434,11 @@ impl ReplaySegmentSpool {
         )
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the replay snapshot cannot be prepared, owned,
+    /// or assembled by the background worker.
     pub fn save_async_tracks_as(
         &self,
         requested: ReplayDuration,

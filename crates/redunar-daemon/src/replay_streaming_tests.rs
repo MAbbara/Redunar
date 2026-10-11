@@ -171,7 +171,7 @@ fn assert_mp4_sample_timing(path: &std::path::Path, timestamps: &[u64]) {
             let count =
                 usize::try_from(u32::from_be_bytes(trun[4..8].try_into().unwrap())).unwrap();
             assert_eq!(trun.len(), 12 + count * 12, "complete sample table");
-            for sample in trun[12..].chunks_exact(12) {
+            for sample in trun[12..].as_chunks::<12>().0 {
                 let duration = u64::from(u32::from_be_bytes(sample[..4].try_into().unwrap()));
                 samples.push((start, duration));
                 start = start.checked_add(duration).unwrap();
@@ -198,8 +198,10 @@ fn assert_sparse_audio(path: &std::path::Path) {
     assert!(decoded.status.success());
     let samples = decoded
         .stdout
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect::<Vec<_>>();
     assert!(samples.len() > 5 * 48_000);
     let peak = |start, end| {

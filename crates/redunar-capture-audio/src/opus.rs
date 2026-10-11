@@ -174,6 +174,12 @@ pub struct OpusDecoder {
 unsafe impl Send for OpusDecoder {}
 
 impl OpusDecoder {
+    /// Open the system Opus library and initialize a stereo decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpusEncoderError`] when the library or decoder symbols cannot
+    /// be loaded, or the decoder cannot be initialized.
     pub fn open() -> Result<Self, OpusEncoderError> {
         let library = DynamicLibrary::open("libopus.so.0")?;
         let create = unsafe { library.symbol::<DecoderCreate>("opus_decoder_create")? };
@@ -200,6 +206,12 @@ impl OpusDecoder {
         })
     }
 
+    /// Decode one bounded Opus packet into interleaved PCM samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpusEncoderError`] when decoding fails or the decoded sample
+    /// count cannot be represented safely.
     pub fn decode_frame(
         &mut self,
         packet: &EncodedOpusPacket,
@@ -218,7 +230,11 @@ impl OpusDecoder {
         if decoded <= 0 {
             return Err(OpusEncoderError("Opus decode failed".to_owned()));
         }
-        samples.truncate(decoded as usize * AUDIO_CHANNELS as usize);
+        let decoded_samples = usize::try_from(decoded)
+            .ok()
+            .and_then(|count| count.checked_mul(AUDIO_CHANNELS as usize))
+            .ok_or_else(|| OpusEncoderError("Opus decoded sample count overflowed".to_owned()))?;
+        samples.truncate(decoded_samples);
         Ok(samples)
     }
 }

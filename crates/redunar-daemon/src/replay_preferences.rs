@@ -40,17 +40,12 @@ pub struct ReplayShortcutBinding {
     pub duration: ReplayDuration,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum MicrophoneMode {
     Off,
+    #[default]
     DefaultInput,
     SelectedInput(String),
-}
-
-impl Default for MicrophoneMode {
-    fn default() -> Self {
-        Self::DefaultInput
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -386,6 +381,7 @@ fn serialize(preferences: &ReplayPreferences) -> String {
     output
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
     let mut lines = contents.lines();
     let version = lines.next().ok_or("preferences are empty")?;
@@ -607,7 +603,9 @@ fn unhex(value: &str) -> Result<Vec<u8>, &'static str> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = digit(pair[0])?;
             let low = digit(pair[1])?;

@@ -21,6 +21,7 @@ const ID_SIMPLE_BLOCK: &[u8] = &[0xa3];
 /// Unknown-sized clusters permit ordered blocks without buffering payloads.
 /// A new level-one Cluster closes the previous one, just as the unknown-sized
 /// Segment is terminated by EOF. Timing and codec validation remain explicit.
+#[allow(dead_code)]
 pub(crate) fn write_streaming_matroska(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -77,7 +78,7 @@ pub(crate) fn write_streaming_matroska_tracks(
             stream,
             &audio.system,
             audio.microphone.as_ref(),
-        )?
+        )?;
     }
     let mut cluster = None;
     let mut next_audio = 0;
@@ -302,6 +303,12 @@ pub fn write_audio_video_matroska(
 }
 
 /// Write a Matroska stream with optional independent microphone audio.
+///
+/// # Errors
+///
+/// Returns [`MatroskaVideoError`] when the ring, packets, audio, timestamps,
+/// or destination cannot be encoded successfully.
+#[allow(clippy::too_many_lines)]
 pub fn write_audio_video_matroska_tracks(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,

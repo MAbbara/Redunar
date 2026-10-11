@@ -1018,6 +1018,11 @@ impl RedunarService {
         Ok(preferences)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preferences cannot be persisted or the active
+    /// replay runtime cannot apply the selected format.
     pub fn set_replay_output_format(
         &self,
         output_format: ReplayOutputFormat,

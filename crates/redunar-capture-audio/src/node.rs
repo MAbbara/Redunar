@@ -109,7 +109,8 @@ pub fn discover_game_audio_node(
 ///
 /// Returns [`GameAudioNodeError`] when the registry is oversized, malformed,
 /// or a candidate sink has malformed metadata.
-/// Select one microphone source from PipeWire registry metadata.
+///
+/// Select one microphone source from `PipeWire` registry metadata.
 ///
 /// A preferred node name is used when supplied; without one exactly one
 /// `Audio/Source` node must exist so Redunar never guesses a physical input.
@@ -157,6 +158,10 @@ pub fn discover_microphone_node(
     }
 }
 
+/// # Errors
+///
+/// Returns [`GameAudioNodeError`] when the registry is oversized, malformed,
+/// or contains multiple possible fallback sinks.
 pub fn discover_output_monitor_node(
     registry: &[u8],
     preferred_node_name: Option<&str>,

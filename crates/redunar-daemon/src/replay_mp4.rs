@@ -14,6 +14,7 @@ const MICROPHONE_TRACK_ID: u32 = 3;
 const MAX_FRAGMENT_DURATION_NS: u64 = 30_000_000_000;
 const MAX_STREAM_FRAGMENT_BYTES: usize = 8 * 1024 * 1024;
 
+#[allow(dead_code)]
 pub(crate) fn write_streaming_mp4(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -302,6 +303,11 @@ pub fn write_audio_video_mp4(
 }
 
 /// Write fragmented MP4 with independent system and optional microphone tracks.
+///
+/// # Errors
+///
+/// Returns [`Mp4VideoError`] when the ring, packets, audio, timestamps, or
+/// destination cannot be encoded successfully.
 pub fn write_audio_video_mp4_tracks(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -401,6 +407,7 @@ pub fn write_audio_video_mp4_tracks(
     })
 }
 
+#[allow(dead_code)]
 fn moov_with_audio(
     stream: &ReplayVideoStream,
     audio: &ReplayAudioSnapshot,

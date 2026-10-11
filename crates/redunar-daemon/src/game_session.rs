@@ -1042,14 +1042,11 @@ fn run_replay_export_pump(
                     start_game_audio_worker(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
             }
             if microphone_worker.is_none() {
-                let microphone = coordinator
-                    .upgrade()
-                    .map(|inner| {
-                        lock_unpoisoned(&inner.replay_preferences)
-                            .microphone
-                            .clone()
-                    })
-                    .unwrap_or(MicrophoneMode::Off);
+                let microphone = coordinator.upgrade().map_or(MicrophoneMode::Off, |inner| {
+                    lock_unpoisoned(&inner.replay_preferences)
+                        .microphone
+                        .clone()
+                });
                 if !matches!(microphone, MicrophoneMode::Off) {
                     replay.enable_microphone_recording();
                     microphone_worker = start_microphone_audio_worker(
@@ -1205,11 +1202,11 @@ fn start_microphone_audio_worker(
                 &replay,
                 timeline_timestamp_ns,
                 timeline_started,
-                mode,
-            )
+                &mode,
+            );
         })
         .map_err(|error| {
-            crate::log_op!("Redunar Replay: could not start microphone worker: {error}")
+            crate::log_op!("Redunar Replay: could not start microphone worker: {error}");
         })
         .ok()
 }
@@ -1219,7 +1216,7 @@ fn run_microphone_audio_worker(
     replay: &ProductionReplayRuntime,
     timeline_timestamp_ns: u64,
     timeline_started: Instant,
-    mode: MicrophoneMode,
+    mode: &MicrophoneMode,
 ) {
     while !stop.load(Ordering::Acquire) {
         let sources = redunar_capture_audio::discover_microphone_audio_sources();
@@ -1413,7 +1410,7 @@ fn game_audio_route_changed(
     receiver: &Receiver<Vec<redunar_capture_audio::AudioCaptureSource>>,
     source: &redunar_capture_audio::AudioCaptureSource,
 ) -> bool {
-    receiver.try_recv().ok().is_some_and(|updated| {
+    receiver.try_recv().is_ok_and(|updated| {
         // Discovery can temporarily omit one backend under load. A failed
         // lookup is not evidence that the current sink changed; the active
         // capture's stall/error path handles a genuinely removed backend.
