@@ -32,7 +32,6 @@ struct ProductionAudioState {
     last_progress: Option<Instant>,
     microphone_buffer: ReplayAudioBuffer,
     microphone_recording: bool,
-    microphone_muted: bool,
 }
 
 struct RuntimeState {
@@ -89,7 +88,6 @@ impl ProductionReplayRuntime {
                     redunar_capture_audio::OpusStreamDescription::default(),
                 ),
                 microphone_recording: false,
-                microphone_muted: false,
             })),
             inner: Arc::new(Mutex::new(RuntimeState {
                 status: ReplayRuntimeStatus::unavailable(settings),
@@ -312,7 +310,7 @@ impl ProductionReplayRuntime {
         packet: redunar_capture_audio::EncodedOpusPacket,
     ) -> Result<(), ReplayRuntimeError> {
         let mut audio = lock_unpoisoned(&self.audio);
-        if !audio.recording || !audio.microphone_recording || audio.microphone_muted {
+        if !audio.recording || !audio.microphone_recording {
             return Err(ReplayRuntimeError::new("microphone capture is inactive"));
         }
         audio
@@ -321,8 +319,8 @@ impl ProductionReplayRuntime {
             .map_err(|error| ReplayRuntimeError::new(error.to_string()))
     }
 
-    pub fn set_microphone_muted(&self, muted: bool) {
-        lock_unpoisoned(&self.audio).microphone_muted = muted;
+    pub(crate) fn enable_microphone_recording(&self) {
+        lock_unpoisoned(&self.audio).microphone_recording = true;
     }
 
     /// Replace the active encoder after the capture source changes size.
@@ -481,12 +479,12 @@ impl ProductionReplayRuntime {
         let result =
             pipeline.save_spooled_replay_as_with_audio_tracks(duration, output_format, || {
                 let audio = lock_unpoisoned(&self.audio);
-                crate::ReplayAudioTracks {
+                crate::replay_audio::mix_audio_tracks(crate::ReplayAudioTracks {
                     system: audio.buffer.snapshot_between(0, u64::MAX),
                     microphone: audio
                         .microphone_recording
                         .then(|| audio.microphone_buffer.snapshot_between(0, u64::MAX)),
-                }
+                })
             });
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(state, completed).is_err() {
@@ -709,6 +707,22 @@ mod tests {
         assert!(!runtime.status().audio_active);
         runtime.submit_audio(packet(0)).unwrap();
         assert!(runtime.status().audio_active);
+    }
+
+    #[test]
+    fn microphone_packets_are_retained_only_after_microphone_capture_is_enabled() {
+        let runtime = ProductionReplayRuntime::unavailable(ReplaySettings::default());
+        lock_unpoisoned(&runtime.audio).recording = true;
+        let packet = redunar_capture_audio::EncodedOpusPacket {
+            timestamp_ns: 0,
+            duration_ns: 20_000_000,
+            bytes: vec![1, 2, 3],
+        };
+        assert!(runtime.submit_microphone_audio(packet.clone()).is_err());
+        runtime.enable_microphone_recording();
+        runtime
+            .submit_microphone_audio(packet)
+            .expect("enabled microphone packet");
     }
 
     #[test]

@@ -40,6 +40,61 @@ pub struct ReplayAudioTracks {
     pub microphone: Option<ReplayAudioSnapshot>,
 }
 
+/// Mix the optional microphone timeline into the system timeline so ordinary
+/// players, which select only one audio track, play both voices together.
+pub(crate) fn mix_audio_tracks(tracks: ReplayAudioTracks) -> ReplayAudioTracks {
+    let Some(microphone) = tracks.microphone.clone() else {
+        return tracks;
+    };
+    let Ok(mut system_decoder) = redunar_capture_audio::OpusDecoder::open() else {
+        return tracks;
+    };
+    let Ok(mut microphone_decoder) = redunar_capture_audio::OpusDecoder::open() else {
+        return tracks;
+    };
+    let microphone_pcm = microphone
+        .packets
+        .iter()
+        .filter_map(|packet| {
+            microphone_decoder
+                .decode_frame(packet)
+                .ok()
+                .map(|pcm| (packet.timestamp_ns, pcm))
+        })
+        .collect::<Vec<_>>();
+    let mut encoder = match redunar_capture_audio::OpusEncoder::open() {
+        Ok(encoder) => encoder,
+        Err(_) => return tracks,
+    };
+    let mut mixed = Vec::with_capacity(tracks.system.packets.len());
+    for packet in &tracks.system.packets {
+        let Ok(mut pcm) = system_decoder.decode_frame(packet) else {
+            return tracks;
+        };
+        if let Some((microphone_timestamp, mic_samples)) = microphone_pcm
+            .iter()
+            .min_by_key(|(timestamp, _)| timestamp.abs_diff(packet.timestamp_ns))
+            && packet.timestamp_ns.abs_diff(*microphone_timestamp) <= packet.duration_ns
+        {
+            for (system, microphone) in pcm.iter_mut().zip(mic_samples.iter()) {
+                *system = ((*system as i32 + *microphone as i32) / 2)
+                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            }
+        }
+        let Ok(encoded) = encoder.encode_frame(packet.timestamp_ns, &pcm) else {
+            return tracks;
+        };
+        mixed.push(encoded);
+    }
+    ReplayAudioTracks {
+        system: ReplayAudioSnapshot {
+            stream: tracks.system.stream,
+            packets: mixed,
+        },
+        microphone: None,
+    }
+}
+
 pub struct ReplayAudioBuffer {
     stream: OpusStreamDescription,
     duration_ns: u64,
@@ -159,6 +214,29 @@ mod tests {
             duration_ns: 20_000_000,
             bytes: vec![1, 2, 3],
         }
+    }
+
+    #[test]
+    fn microphone_track_is_mixed_into_one_system_track() {
+        let mut encoder = redunar_capture_audio::OpusEncoder::open().expect("libopus");
+        let samples = vec![1_000_i16; redunar_capture_audio::AUDIO_FRAME_SAMPLES_PER_CHANNEL * 2];
+        let system = encoder.encode_frame(0, &samples).expect("system packet");
+        let microphone = encoder
+            .encode_frame(0, &samples)
+            .expect("microphone packet");
+        let mixed = mix_audio_tracks(ReplayAudioTracks {
+            system: ReplayAudioSnapshot {
+                stream: OpusStreamDescription::default(),
+                packets: vec![system],
+            },
+            microphone: Some(ReplayAudioSnapshot {
+                stream: OpusStreamDescription::default(),
+                packets: vec![microphone],
+            }),
+        });
+        assert!(mixed.microphone.is_none());
+        assert_eq!(mixed.system.packets.len(), 1);
+        assert!(!mixed.system.packets[0].bytes.is_empty());
     }
 
     #[test]

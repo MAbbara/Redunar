@@ -13,7 +13,9 @@ pub use node::{
     GameAudioNode, GameAudioNodeError, discover_game_audio_node, discover_microphone_node,
     discover_output_monitor_node,
 };
-pub use opus::{EncodedOpusPacket, OpusEncoder, OpusEncoderError, OpusStreamDescription};
+pub use opus::{
+    EncodedOpusPacket, OpusDecoder, OpusEncoder, OpusEncoderError, OpusStreamDescription,
+};
 pub use source::{
     AudioCaptureError, AudioCaptureSource, MicrophoneAudioCapture, MicrophoneAudioSource,
     SystemAudioCapture, discover_microphone_audio_sources, discover_system_audio_source,

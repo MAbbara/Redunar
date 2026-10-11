@@ -697,16 +697,6 @@ pub fn set_replay_microphone(
 }
 
 #[tauri::command]
-pub fn set_replay_microphone_mute(muted: bool) -> Result<(), String> {
-    crate::backend::ensure_write_access()?;
-    crate::backend::service()
-        .game_session_coordinator()
-        .replay_runtime()
-        .set_microphone_muted(muted);
-    Ok(())
-}
-
-#[tauri::command]
 pub fn set_replay_save_parent(parent: Option<String>) -> Result<ReplayPreferencesDto, String> {
     crate::backend::ensure_write_access()?;
     crate::backend::service()

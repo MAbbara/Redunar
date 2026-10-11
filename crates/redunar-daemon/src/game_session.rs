@@ -1051,6 +1051,7 @@ fn run_replay_export_pump(
                     })
                     .unwrap_or(MicrophoneMode::Off);
                 if !matches!(microphone, MicrophoneMode::Off) {
+                    replay.enable_microphone_recording();
                     microphone_worker = start_microphone_audio_worker(
                         Arc::clone(&stop),
                         replay.clone(),

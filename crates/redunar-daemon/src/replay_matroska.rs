@@ -488,6 +488,7 @@ fn write_audio_video_tracks(
     let mut audio_track = Vec::new();
     append_unsigned(&mut audio_track, &[0xd7], 2)?;
     append_unsigned(&mut audio_track, &[0x73, 0xc5], 2)?;
+    append_bytes(&mut audio_track, &[0x53, 0x6e], b"System audio")?;
     append_unsigned(&mut audio_track, &[0x83], 2)?;
     append_unsigned(&mut audio_track, &[0x9c], 0)?;
     append_unsigned(&mut audio_track, &[0x56, 0xaa], 6_500_000)?;
@@ -514,6 +515,7 @@ fn write_audio_video_tracks(
         let mut track = Vec::new();
         append_unsigned(&mut track, &[0xd7], 3)?;
         append_unsigned(&mut track, &[0x73, 0xc5], 3)?;
+        append_bytes(&mut track, &[0x53, 0x6e], b"Microphone")?;
         append_unsigned(&mut track, &[0x83], 2)?;
         append_unsigned(&mut track, &[0x9c], 0)?;
         append_unsigned(&mut track, &[0x56, 0xaa], 6_500_000)?;

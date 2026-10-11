@@ -13,6 +13,10 @@ const MAX_OPUS_PACKET_BYTES: usize = 4_096;
 type EncoderCreate = unsafe extern "C" fn(c_int, c_int, c_int, *mut c_int) -> *mut c_void;
 type Encode = unsafe extern "C" fn(*mut c_void, *const i16, c_int, *mut c_uchar, c_int) -> c_int;
 type EncoderDestroy = unsafe extern "C" fn(*mut c_void);
+type DecoderCreate = unsafe extern "C" fn(c_int, c_int, *mut c_int) -> *mut c_void;
+type Decode =
+    unsafe extern "C" fn(*mut c_void, *const c_uchar, c_int, *mut i16, c_int, c_int) -> c_int;
+type DecoderDestroy = unsafe extern "C" fn(*mut c_void);
 type StrError = unsafe extern "C" fn(c_int) -> *const c_char;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +158,76 @@ impl Drop for OpusEncoder {
         if !self.encoder.is_null() {
             unsafe { (self.destroy)(self.encoder) };
             self.encoder = ptr::null_mut();
+        }
+        let _ = &self.library;
+    }
+}
+
+/// Stateful Opus decoder used when combining the system and microphone tracks.
+pub struct OpusDecoder {
+    library: DynamicLibrary,
+    decoder: *mut c_void,
+    decode: Decode,
+    destroy: DecoderDestroy,
+}
+
+unsafe impl Send for OpusDecoder {}
+
+impl OpusDecoder {
+    pub fn open() -> Result<Self, OpusEncoderError> {
+        let library = DynamicLibrary::open("libopus.so.0")?;
+        let create = unsafe { library.symbol::<DecoderCreate>("opus_decoder_create")? };
+        let decode = unsafe { library.symbol::<Decode>("opus_decode")? };
+        let destroy = unsafe { library.symbol::<DecoderDestroy>("opus_decoder_destroy")? };
+        let mut error = 0;
+        let decoder = unsafe {
+            create(
+                c_int::try_from(AUDIO_SAMPLE_RATE).unwrap_or(48_000),
+                c_int::from(AUDIO_CHANNELS),
+                &raw mut error,
+            )
+        };
+        if decoder.is_null() || error != OPUS_OK {
+            return Err(OpusEncoderError(format!(
+                "could not initialize Opus decoder: {error}"
+            )));
+        }
+        Ok(Self {
+            library,
+            decoder,
+            decode,
+            destroy,
+        })
+    }
+
+    pub fn decode_frame(
+        &mut self,
+        packet: &EncodedOpusPacket,
+    ) -> Result<Vec<i16>, OpusEncoderError> {
+        let mut samples = vec![0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS as usize];
+        let decoded = unsafe {
+            (self.decode)(
+                self.decoder,
+                packet.bytes.as_ptr(),
+                c_int::try_from(packet.bytes.len()).unwrap_or(0),
+                samples.as_mut_ptr(),
+                c_int::try_from(AUDIO_FRAME_SAMPLES_PER_CHANNEL).unwrap_or(960),
+                0,
+            )
+        };
+        if decoded <= 0 {
+            return Err(OpusEncoderError("Opus decode failed".to_owned()));
+        }
+        samples.truncate(decoded as usize * AUDIO_CHANNELS as usize);
+        Ok(samples)
+    }
+}
+
+impl Drop for OpusDecoder {
+    fn drop(&mut self) {
+        if !self.decoder.is_null() {
+            unsafe { (self.destroy)(self.decoder) };
+            self.decoder = ptr::null_mut();
         }
         let _ = &self.library;
     }
