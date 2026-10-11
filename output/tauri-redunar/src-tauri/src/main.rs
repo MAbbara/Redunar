@@ -305,7 +305,6 @@ fn main() {
             runtime::replay_display_capability,
             runtime::set_replay_save_parent,
             runtime::set_replay_microphone,
-            runtime::set_replay_microphone_mute,
             runtime::set_replay_overlay_behavior,
             runtime::set_replay_initial_save_duration,
             runtime::hide_replay_menu,

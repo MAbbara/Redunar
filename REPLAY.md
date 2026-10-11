@@ -269,8 +269,9 @@ exactly one recorded session window.
 ## Audio behavior
 
 Replay records the default output monitor: the same mixed audio the user hears.
-It does not depend on game-process ownership. Optional microphone capture is
-independently configured and defaults to Off; when enabled it is retained as a
+It does not depend on game-process ownership. Microphone capture is enabled by
+default using the system-selected input; it can be switched off in Replay
+settings. When enabled it is retained as a
 separate Opus track so users can mute or edit commentary without baking it into
 system audio. Device selection is best effort and a missing microphone never
 stops video or system-output audio. System-output capture deliberately includes

@@ -466,7 +466,11 @@ fn audio_trak(audio: &ReplayAudioSnapshot, track_id: u32) -> Result<Vec<u8>, Mp4
     put_u32(&mut hdlr, 0);
     hdlr.extend_from_slice(b"soun");
     hdlr.extend_from_slice(&[0; 12]);
-    hdlr.extend_from_slice(b"Redunar Audio\0");
+    hdlr.extend_from_slice(if track_id == MICROPHONE_TRACK_ID {
+        b"Redunar Microphone\0".as_slice()
+    } else {
+        b"Redunar System Audio\0".as_slice()
+    });
     push_box(&mut mdia, *b"hdlr", &hdlr)?;
     push_box(&mut mdia, *b"minf", &audio_minf(audio)?)?;
     push_box(&mut contents, *b"mdia", &mdia)?;

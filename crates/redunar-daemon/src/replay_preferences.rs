@@ -49,7 +49,7 @@ pub enum MicrophoneMode {
 
 impl Default for MicrophoneMode {
     fn default() -> Self {
-        Self::Off
+        Self::DefaultInput
     }
 }
 
@@ -98,7 +98,7 @@ impl Default for ReplayPreferences {
                 shortcut: DEFAULT_SHORTCUT.to_owned(),
                 duration: ReplayDuration::Seconds30,
             }],
-            microphone: MicrophoneMode::Off,
+            microphone: MicrophoneMode::DefaultInput,
         }
     }
 }
@@ -729,6 +729,7 @@ mod tests {
         let preferences = ReplayPreferences::default();
         assert_eq!(preferences.overlay_shortcut, "Shift+Tab");
         assert!(preferences.close_overlay_on_outside_click);
+        assert_eq!(preferences.microphone, MicrophoneMode::DefaultInput);
         assert_eq!(
             preferences.resolved_directory(Some(Path::new("/home/player")), Path::new("/state")),
             PathBuf::from("/home/player/Videos/Redunar Replays")
