@@ -1,3 +1,4 @@
+use crate::replay_packet_source::ReplayPacketSource;
 use crate::{
     EncodedReplayPacket, ReplayBudget, ReplayClipStore, ReplayOutputFormat, ReplayVideoStream,
     StoredReplayClip,
@@ -434,19 +435,48 @@ impl ReplaySegmentSpool {
         )
     }
 
+    /// Save optional independent audio timelines with the selected video window.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the replay snapshot cannot be prepared, owned,
-    /// or assembled by the background worker.
+    /// Returns an error when the snapshot queue, worker or spool is unavailable.
     pub fn save_async_tracks_as(
+        &self,
+        requested: ReplayDuration,
+        settings: ReplaySettings,
+        stream: ReplayVideoStream,
+        store: ReplayClipStore,
+        output_format: ReplayOutputFormat,
+        audio: crate::ReplayAudioTracks,
+    ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
+        self.save_async_tracks_with_audio(
+            requested,
+            settings,
+            stream,
+            store,
+            output_format,
+            move |start, end| {
+                let mut audio = audio;
+                let in_window = |packet: &redunar_capture_audio::EncodedOpusPacket| {
+                    packet.timestamp_ns < end
+                        && packet.timestamp_ns.saturating_add(packet.duration_ns) > start
+                };
+                audio.system.packets.retain(in_window);
+                if let Some(input) = &mut audio.microphone {
+                    input.packets.retain(in_window);
+                }
+                audio
+            },
+        )
+    }
+
+    pub(crate) fn save_async_tracks_with_audio(
         &self,
         requested: ReplayDuration,
         mut settings: ReplaySettings,
         stream: ReplayVideoStream,
         store: ReplayClipStore,
         output_format: ReplayOutputFormat,
-        audio: crate::ReplayAudioTracks,
+        audio_snapshot: impl FnOnce(u64, u64) -> crate::ReplayAudioTracks + Send + 'static,
     ) -> Result<ReplayAssemblyJob, ReplaySpoolError> {
         let cancel = Arc::new(AtomicBool::new(false));
         if requested.seconds() > RETAINED_DURATION.seconds()
@@ -492,8 +522,8 @@ impl ReplaySegmentSpool {
                     &stream,
                     &store,
                     output_format,
-                    &audio,
-                    cancel,
+                    audio_snapshot,
+                    &cancel,
                 )
             })
             .map_err(|_| ReplaySpoolError::new("could not start Replay clip assembler"))?;
@@ -652,11 +682,24 @@ fn assemble_snapshot(
     stream: &ReplayVideoStream,
     store: &ReplayClipStore,
     output_format: ReplayOutputFormat,
-    audio: &crate::ReplayAudioTracks,
-    cancel: Arc<AtomicBool>,
+    audio_snapshot: impl FnOnce(u64, u64) -> crate::ReplayAudioTracks,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<StoredReplayClip, ReplaySpoolError> {
-    let mut packets = crate::replay_spool_reader::SpoolPackets::scan(segments, settings, cancel)
-        .map_err(|error| io_error("could not inspect Replay snapshot packets", &error))?;
+    let mut packets =
+        crate::replay_spool_reader::SpoolPackets::scan(segments, settings, Arc::clone(cancel))
+            .map_err(|error| io_error("could not inspect Replay snapshot packets", &error))?;
+    let window = packets.window();
+    packets
+        .check_cancel()
+        .map_err(|error| io_error("Replay snapshot cancelled", &error))?;
+    // Only the selected window is copied under the audio lock. Codec work runs
+    // here, after the lock is released, and cancellation is checked per frame.
+    let audio = crate::replay_audio_mix::mix_audio_tracks(
+        audio_snapshot(window.0, window.1),
+        window,
+        cancel,
+    )
+    .map_err(|error| io_error("could not mix Replay snapshot audio", &error))?;
     // Clip duration is selected at save time and can be longer than the
     // legacy duration retained in the recording profile. Re-open the owned
     // store with the requested interval's byte budget so long saves are not
@@ -676,7 +719,7 @@ fn assemble_snapshot(
             ))
         })?;
     requested_store
-        .save_streaming_tracks(stream, &mut packets, audio, output_format)
+        .save_streaming_tracks(stream, &mut packets, &audio, output_format)
         .map_err(|error| {
             ReplaySpoolError::new(format!("could not store assembled Replay: {error}"))
         })

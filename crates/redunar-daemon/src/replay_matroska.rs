@@ -21,7 +21,7 @@ const ID_SIMPLE_BLOCK: &[u8] = &[0xa3];
 /// Unknown-sized clusters permit ordered blocks without buffering payloads.
 /// A new level-one Cluster closes the previous one, just as the unknown-sized
 /// Segment is terminated by EOF. Timing and codec validation remain explicit.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn write_streaming_matroska(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -42,25 +42,22 @@ pub(crate) fn write_streaming_matroska_tracks(
     audio: &ReplayAudioTracks,
 ) -> Result<u64, MatroskaVideoError> {
     let (origin, end) = source.window();
-    let audio_packets = audio
+    // Merge bounded packet references before writing either track. Appending
+    // the microphone after video can move a cluster backwards in time.
+    let mut audio_packets = audio
         .system
         .packets
         .iter()
-        .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
         .map(|packet| (packet, 2))
-        .collect::<Vec<_>>();
-    let microphone_packets = audio
-        .microphone
-        .as_ref()
-        .map(|microphone| {
-            microphone
-                .packets
+        .chain(
+            audio
+                .microphone
                 .iter()
-                .filter(|packet| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
-                .map(|packet| (packet, 3))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+                .flat_map(|microphone| microphone.packets.iter().map(|packet| (packet, 3))),
+        )
+        .filter(|(packet, _)| packet.timestamp_ns >= origin && packet.timestamp_ns < end)
+        .collect::<Vec<_>>();
+    audio_packets.sort_by_key(|(packet, _)| packet.timestamp_ns);
     let mut output = CountingWriter::new(destination);
     write_ebml_header(&mut output)?;
     output.write_all(ID_SEGMENT)?;
@@ -70,7 +67,7 @@ pub(crate) fn write_streaming_matroska_tracks(
         end.checked_sub(origin)
             .ok_or(MatroskaVideoError::TimestampOverflow)?,
     )?;
-    if audio_packets.is_empty() && microphone_packets.is_empty() {
+    if audio_packets.is_empty() {
         write_tracks(&mut output, stream)?;
     } else {
         write_audio_video_tracks(
@@ -121,16 +118,17 @@ pub(crate) fn write_streaming_matroska_tracks(
             &mut cluster,
         )?;
     }
-    for packet in &microphone_packets {
-        source.check_cancel()?;
-        write_streaming_block(
-            &mut output,
-            MatroskaBlock::Audio(packet.0, packet.1),
-            origin,
-            &mut cluster,
-        )?;
-    }
     Ok(output.written)
+}
+
+fn invalid_audio_packet(packet: &EncodedOpusPacket) -> bool {
+    packet.bytes.is_empty()
+        || packet.bytes.len() > 4096
+        || packet.duration_ns == 0
+        || packet
+            .timestamp_ns
+            .checked_add(packet.duration_ns)
+            .is_none()
 }
 
 fn write_streaming_block(
@@ -139,14 +137,8 @@ fn write_streaming_block(
     origin: u64,
     cluster: &mut Option<u64>,
 ) -> Result<(), MatroskaVideoError> {
-    if let MatroskaBlock::Audio(packet, 2) = block
-        && (packet.bytes.is_empty()
-            || packet.bytes.len() > 4096
-            || packet.duration_ns == 0
-            || packet
-                .timestamp_ns
-                .checked_add(packet.duration_ns)
-                .is_none())
+    if let MatroskaBlock::Audio(packet, _) = block
+        && invalid_audio_packet(packet)
     {
         return Err(MatroskaVideoError::InvalidPacket);
     }
@@ -305,10 +297,7 @@ pub fn write_audio_video_matroska(
 /// Write a Matroska stream with optional independent microphone audio.
 ///
 /// # Errors
-///
-/// Returns [`MatroskaVideoError`] when the ring, packets, audio, timestamps,
-/// or destination cannot be encoded successfully.
-#[allow(clippy::too_many_lines)]
+/// Returns an error on invalid media, timestamp overflow or output failure.
 pub fn write_audio_video_matroska_tracks(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -352,15 +341,8 @@ pub fn write_audio_video_matroska_tracks(
     if audio_packets
         .iter()
         .chain(microphone_packets.iter())
-        .any(|packet| {
-            packet.bytes.is_empty()
-                || packet.bytes.len() > 4_096
-                || packet.duration_ns == 0
-                || packet
-                    .timestamp_ns
-                    .checked_add(packet.duration_ns)
-                    .is_none()
-        })
+        .copied()
+        .any(invalid_audio_packet)
     {
         return Err(MatroskaVideoError::InvalidPacket);
     }

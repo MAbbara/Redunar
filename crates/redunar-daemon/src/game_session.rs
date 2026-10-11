@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+mod microphone;
 mod saved_notice;
 
 const REPLAY_EXPORT_WAIT: Duration = Duration::from_millis(250);
@@ -395,6 +396,28 @@ impl ProductionGameSessionCoordinator {
             self.inner.replay.output_format(),
             &lock_unpoisoned(&self.inner.replay_preferences),
         )
+    }
+
+    pub(crate) fn set_microphone_mode(
+        &self,
+        mode: MicrophoneMode,
+    ) -> Result<ReplayPreferences, crate::ReplayPreferencesError> {
+        // Serialize the preference write with session preparation; checking a
+        // status snapshot alone allows a launch to race the setting change.
+        let state = lock_unpoisoned(&self.inner.state);
+        if matches!(
+            state.status.phase,
+            GameSessionPhase::Launching | GameSessionPhase::Running | GameSessionPhase::Ending
+        ) {
+            return Err(crate::ReplayPreferencesError::new(
+                "End the game session before changing microphone capture.",
+            ));
+        }
+        let preferences = replay_preferences::set_microphone(&self.inner.clip_games_state, mode)?;
+        *lock_unpoisoned(&self.inner.replay_preferences) = preferences.clone();
+        drop(state);
+        self.publish_replay_menu();
+        Ok(preferences)
     }
 
     pub(crate) fn update_replay_preferences(&self, preferences: ReplayPreferences) {
@@ -1041,7 +1064,11 @@ fn run_replay_export_pump(
                 audio_worker =
                     start_game_audio_worker(Arc::clone(&stop), replay.clone(), frame.timestamp_ns);
             }
-            if microphone_worker.is_none() {
+            if microphone_worker.is_some() {
+                // A recorder re-arm resets ingestion state, while this session
+                // still owns its existing microphone helper. Resume that track.
+                replay.enable_microphone_recording();
+            } else {
                 let microphone = coordinator.upgrade().map_or(MicrophoneMode::Off, |inner| {
                     lock_unpoisoned(&inner.replay_preferences)
                         .microphone
@@ -1049,7 +1076,7 @@ fn run_replay_export_pump(
                 });
                 if !matches!(microphone, MicrophoneMode::Off) {
                     replay.enable_microphone_recording();
-                    microphone_worker = start_microphone_audio_worker(
+                    microphone_worker = microphone::start(
                         Arc::clone(&stop),
                         replay.clone(),
                         frame.timestamp_ns,
@@ -1183,82 +1210,6 @@ fn enter_replay_recovery(
     *dimensions = None;
     *rearm_deadline = Some(Instant::now() + *rearm_backoff);
     *rearm_backoff = rearm_backoff.mul_f32(2.0).min(REPLAY_REARM_BACKOFF_MAX);
-}
-
-fn start_microphone_audio_worker(
-    stop: Arc<AtomicBool>,
-    replay: ProductionReplayRuntime,
-    first_frame_timestamp_ns: u64,
-    mode: MicrophoneMode,
-) -> Option<JoinHandle<()>> {
-    let timeline_started = Instant::now();
-    let timeline_timestamp_ns =
-        redunar_capture_audio::monotonic_now_ns().unwrap_or(first_frame_timestamp_ns);
-    thread::Builder::new()
-        .name("redunar-replay-microphone".to_owned())
-        .spawn(move || {
-            run_microphone_audio_worker(
-                &stop,
-                &replay,
-                timeline_timestamp_ns,
-                timeline_started,
-                &mode,
-            );
-        })
-        .map_err(|error| {
-            crate::log_op!("Redunar Replay: could not start microphone worker: {error}");
-        })
-        .ok()
-}
-
-fn run_microphone_audio_worker(
-    stop: &Arc<AtomicBool>,
-    replay: &ProductionReplayRuntime,
-    timeline_timestamp_ns: u64,
-    timeline_started: Instant,
-    mode: &MicrophoneMode,
-) {
-    while !stop.load(Ordering::Acquire) {
-        let sources = redunar_capture_audio::discover_microphone_audio_sources();
-        let source = match &mode {
-            MicrophoneMode::DefaultInput => sources.first().cloned(),
-            MicrophoneMode::SelectedInput(name) => sources
-                .into_iter()
-                .find(|candidate| candidate.name() == name),
-            MicrophoneMode::Off => None,
-        };
-        let Some(source) = source else {
-            crate::log_op!("Redunar Replay: microphone input unavailable; retrying");
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        };
-        let Ok(mut capture) = redunar_capture_audio::MicrophoneAudioCapture::start(
-            &source,
-            timeline_timestamp_ns,
-            timeline_started,
-        ) else {
-            crate::log_op!(
-                "Redunar Replay: microphone capture unavailable via {}; retrying",
-                source.backend_name()
-            );
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        };
-        crate::log_op!(
-            "Redunar Replay: microphone capture active via {}",
-            source.backend_name()
-        );
-        while !stop.load(Ordering::Acquire) {
-            match capture.next_packet(Duration::from_millis(100)) {
-                Ok(Some(packet)) => {
-                    let _ = replay.submit_microphone_audio(packet);
-                }
-                Ok(None) => {}
-                Err(_) => break,
-            }
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
 }
 
 fn start_game_audio_worker(
@@ -1654,6 +1605,42 @@ mod tests {
             overlay: GameSessionFeatureRequest::Enabled,
             replay: GameSessionFeatureRequest::Enabled,
         }
+    }
+
+    #[test]
+    fn microphone_setting_is_locked_through_launch_run_and_teardown() {
+        let root = std::env::temp_dir().join(format!("redunar-mic-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let coordinator = ProductionGameSessionCoordinator::new(root.clone());
+        coordinator
+            .set_microphone_mode(MicrophoneMode::Off)
+            .unwrap();
+        for phase in [
+            GameSessionPhase::Launching,
+            GameSessionPhase::Running,
+            GameSessionPhase::Ending,
+        ] {
+            lock_unpoisoned(&coordinator.inner.state).status.phase = phase;
+            assert!(
+                coordinator
+                    .set_microphone_mode(MicrophoneMode::DefaultInput)
+                    .is_err()
+            );
+            assert_eq!(
+                replay_preferences::load(&root).unwrap().microphone,
+                MicrophoneMode::Off
+            );
+        }
+        lock_unpoisoned(&coordinator.inner.state).status.phase = GameSessionPhase::Ended;
+        coordinator
+            .set_microphone_mode(MicrophoneMode::DefaultInput)
+            .unwrap();
+        assert_eq!(
+            replay_preferences::load(&root).unwrap().microphone,
+            MicrophoneMode::DefaultInput
+        );
+        drop(coordinator);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

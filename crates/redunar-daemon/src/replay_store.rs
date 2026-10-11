@@ -341,11 +341,10 @@ impl ReplayClipStore {
         self.save_with_audio_tracks_as(stream, ring, &tracks, output_format)
     }
 
+    /// Save video with bounded independent audio tracks.
     ///
     /// # Errors
-    ///
-    /// Returns [`ReplayStoreError`] for invalid packet timing, container
-    /// overflow, unsafe storage ownership, or durable commit failure.
+    /// Returns an error on invalid media, unsafe storage or insufficient space.
     pub fn save_with_audio_tracks_as(
         &self,
         stream: &ReplayVideoStream,
@@ -440,7 +439,7 @@ impl ReplayClipStore {
         })
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn save_streaming(
         &self,
         stream: &ReplayVideoStream,

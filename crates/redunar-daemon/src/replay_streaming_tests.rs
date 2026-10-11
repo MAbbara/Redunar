@@ -403,6 +403,159 @@ fn streamed_spool_mkv_and_mp4_decode_with_audio_and_cross_cluster_timestamps() {
 }
 
 #[test]
+fn saved_mixed_and_microphone_only_clips_decode_as_one_audible_track() {
+    let fixture = Fixture::new();
+    let (encoded, stream) = encoded_fixture();
+    let settings = ReplaySettings::default();
+    let store = ReplayClipStore::open(
+        fixture.0.join("clips"),
+        ReplayBudget::from_settings(settings),
+    )
+    .unwrap();
+    let mut spool = ReplaySegmentSpool::open(fixture.0.join("spool"), settings).unwrap();
+    for index in 0..20 {
+        spool
+            .try_submit(
+                h264_annex_b_access_unit(index * 100_000_000, 100_000_000, &encoded).unwrap(),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while spool.stats().accepted_packets < index + 1 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    for system in [
+        mixed_audio_fixture(true),
+        ReplayAudioSnapshot {
+            stream: redunar_capture_audio::OpusStreamDescription::default(),
+            packets: vec![],
+        },
+    ] {
+        for format in [ReplayOutputFormat::Matroska, ReplayOutputFormat::Mp4] {
+            let clip = spool
+                .save_async_tracks_as(
+                    ReplayDuration::Seconds15,
+                    settings,
+                    stream.clone(),
+                    store.clone(),
+                    format,
+                    ReplayAudioTracks {
+                        system: system.clone(),
+                        microphone: Some(mixed_audio_fixture(false)),
+                    },
+                )
+                .unwrap()
+                .join()
+                .unwrap();
+            assert_mixed_audio(&clip.path);
+        }
+    }
+    let before = store.inventory().unwrap();
+    let malformed = ReplayAudioSnapshot {
+        stream: redunar_capture_audio::OpusStreamDescription::default(),
+        packets: vec![redunar_capture_audio::EncodedOpusPacket {
+            timestamp_ns: 0,
+            duration_ns: 20_000_000,
+            bytes: vec![0xff],
+        }],
+    };
+    assert!(
+        spool
+            .save_async_tracks_as(
+                ReplayDuration::Seconds15,
+                settings,
+                stream,
+                store.clone(),
+                ReplayOutputFormat::Matroska,
+                ReplayAudioTracks {
+                    system: mixed_audio_fixture(false),
+                    microphone: Some(malformed)
+                }
+            )
+            .unwrap()
+            .join()
+            .is_err()
+    );
+    assert_eq!(
+        store.inventory().unwrap().len(),
+        before.len(),
+        "failed mixing preserves committed clips"
+    );
+    spool.shutdown();
+}
+
+fn mixed_audio_fixture(missing_system: bool) -> ReplayAudioSnapshot {
+    let mut opus = redunar_capture_audio::OpusEncoder::open().unwrap();
+    ReplayAudioSnapshot {
+        stream: opus.stream(),
+        packets: (0..100)
+            .filter(|index| !missing_system || !(25..75).contains(index))
+            .map(|index| {
+                let pcm = std::array::from_fn::<_, 1920, _>(|sample| {
+                    if sample / 2 % 120 < 60 { 2000 } else { -2000 }
+                });
+                opus.encode_frame(index * 20_000_000, &pcm).unwrap()
+            })
+            .collect(),
+    }
+}
+
+fn assert_mixed_audio(path: &std::path::Path) {
+    let probe = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        probe.status.success(),
+        "{}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+    let codecs = String::from_utf8(probe.stdout).unwrap();
+    assert_eq!(
+        codecs.lines().filter(|name| *name == "opus").count(),
+        1,
+        "{codecs}"
+    );
+    let decode = Command::new("ffmpeg")
+        .args(["-v", "error", "-xerror", "-i"])
+        .arg(path)
+        .args([
+            "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        decode.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decode.stderr)
+    );
+    let samples = decode
+        .stdout
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert!(samples.len() >= 95_000, "full clip tail remains audible");
+    let middle_peak = samples[48_000..60_000]
+        .iter()
+        .copied()
+        .map(f32::abs)
+        .fold(0.0_f32, f32::max);
+    assert!(
+        middle_peak > 0.01,
+        "microphone remains audible inside the system gap: {middle_peak}"
+    );
+}
+
+#[test]
 fn failed_streaming_read_discards_temporary_output_and_keeps_existing_clips() {
     use crate::replay_packet_source::ReplayPacketSource;
     struct Broken {

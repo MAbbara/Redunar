@@ -44,6 +44,14 @@ withholds writes for compatibility with older builds that do not take the lock.
 | `redunar-hotkeys` | Same-user bounded keyboard shortcut helper |
 | `redunar-capture-kms` | Experimental diagnostic, excluded from production Replay |
 
+Replay microphone helper ownership and route recovery live in
+`crates/redunar-daemon/src/game_session/microphone.rs`. The session coordinator
+serializes mode writes with launch ownership. Runtime audio buffers own retained
+encoded packets; the spool assembler selects the video window before requesting
+its bounded audio snapshots. `replay_audio_mix.rs` decodes and mixes those
+snapshots on the assembler thread, outside capture/runtime locks. Capture utility
+arguments, discovery deadlines and helper cleanup stay in `redunar-capture-audio`.
+
 Follow native command registration and `RedunarService::for_tauri()` for
 production behavior. The Tauri service owns the active feature and privilege
 boundary; compatibility data must never activate an unsupported capability.

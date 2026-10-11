@@ -398,17 +398,7 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
         return Err("unsupported preferences version");
     }
     let parent = field(lines.next(), "save-parent")?;
-    let custom_save_parent = if parent == "default" {
-        None
-    } else {
-        let bytes = unhex(parent)?;
-        if bytes.len() > MAX_PATH_BYTES {
-            return Err("save parent exceeds the supported length");
-        }
-        let path = PathBuf::from(OsString::from_vec(bytes));
-        validate_parent(&path).map_err(|_| "save parent is invalid")?;
-        Some(path)
-    };
+    let custom_save_parent = parse_save_parent(parent)?;
     let output_format = if matches!(
         version,
         PREFERENCES_HEADER_V3
@@ -493,6 +483,19 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
         save_shortcuts,
         microphone,
     })
+}
+
+fn parse_save_parent(parent: &str) -> Result<Option<PathBuf>, &'static str> {
+    if parent == "default" {
+        return Ok(None);
+    }
+    let bytes = unhex(parent)?;
+    if bytes.len() > MAX_PATH_BYTES {
+        return Err("save parent exceeds the supported length");
+    }
+    let path = PathBuf::from(OsString::from_vec(bytes));
+    validate_parent(&path).map_err(|_| "save parent is invalid")?;
+    Ok(Some(path))
 }
 
 fn microphone_token(value: &MicrophoneMode) -> String {

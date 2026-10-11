@@ -107,16 +107,26 @@ it does not reload the selected clip into an encoded ring. MKV pulls one packet
 at a time; MP4 retains at most an 8 MiB video fragment plus one lookahead packet.
 Individual packets remain capped at 8 MiB; packet conversion can temporarily
 duplicate that one payload. The metadata index follows the bounded frame count,
-and audio retains its separate 32 MiB bound. These are implementation bounds,
+and each enabled audio input retains a separate 32 MiB bound. These are implementation bounds,
 not measured whole-process RSS. Clip muxing does not hold the inventory lock;
 ownership and current inventory are revalidated before atomic commit.
 The authoritative constants live in `replay_spool.rs`, `replay_encoder.rs`, and
 `replay_store.rs` under `crates/redunar-daemon/src/`.
 
 Audio uses fixed 20 ms Opus frames and one long-lived capture process, with
-retention capped at 45,000 packets/32 MiB. Audio discovery is bounded; audio
-failure must not stop video. The default-output behavior is described in
-[REPLAY.md](REPLAY.md); it does not change these resource budgets.
+retention capped at 45,000 packets/32 MiB per input (up to 64 MiB for system
+output plus microphone). Opus encoding uses one fixed scratch frame and
+allocates each retained payload to its encoded length, rather than retaining a
+maximum-size allocation for every packet. Saving copies encoded packets only for the selected
+video window; those snapshots have the same per-input limits. The assembler
+keeps at most one decoded 20 ms PCM frame per input and one output accumulator,
+then retains at most 45,000 packets/32 MiB of mixed output. PCM storage and
+lookup work do not grow with the retained history; mixing visits selected
+packets in timestamp order and checks cancellation each frame. These separate
+bounds include additional save-time storage and are not a whole-process RSS
+measurement. Audio discovery and retry logging are bounded; audio failure must
+not stop video. See [REPLAY.md](REPLAY.md#audio-behavior) for capture and gap
+semantics.
 
 Fixed 120 FPS is subject to the implemented display/surface limits and hardware
 validation. A capability check or short encode probe is not sustained frame-pacing

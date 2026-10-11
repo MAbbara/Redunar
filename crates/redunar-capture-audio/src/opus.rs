@@ -125,7 +125,9 @@ impl OpusEncoder {
                 "invalid bounded Opus input frame".to_owned(),
             ));
         }
-        let mut output = vec![0_u8; MAX_OPUS_PACKET_BYTES];
+        // Keep scratch capacity off the retained packet: thousands of small
+        // frames must not each reserve the encoder's maximum output allocation.
+        let mut output = [0_u8; MAX_OPUS_PACKET_BYTES];
         let encoded = unsafe {
             (self.encode)(
                 self.encoder,
@@ -139,11 +141,17 @@ impl OpusEncoder {
             let message = unsafe { CStr::from_ptr((self.strerror)(encoded)) }.to_string_lossy();
             return Err(OpusEncoderError(format!("Opus encode failed: {message}")));
         }
-        output.truncate(usize::try_from(encoded).unwrap_or(0));
+        let length = usize::try_from(encoded).unwrap_or(0);
+        let bytes = output
+            .get(..length)
+            .ok_or_else(|| {
+                OpusEncoderError("Opus encoded packet exceeds its fixed bound".to_owned())
+            })?
+            .to_vec();
         Ok(EncodedOpusPacket {
             timestamp_ns,
             duration_ns: AUDIO_FRAME_DURATION_NS,
-            bytes: output,
+            bytes,
         })
     }
 
@@ -171,15 +179,14 @@ pub struct OpusDecoder {
     destroy: DecoderDestroy,
 }
 
+// SAFETY: the decoder owns its opaque state and library; only &mut self decodes.
 unsafe impl Send for OpusDecoder {}
 
 impl OpusDecoder {
-    /// Open the system Opus library and initialize a stereo decoder.
+    /// Load libopus and create a stereo decoder.
     ///
     /// # Errors
-    ///
-    /// Returns [`OpusEncoderError`] when the library or decoder symbols cannot
-    /// be loaded, or the decoder cannot be initialized.
+    /// Returns an error when the library, symbols or decoder cannot be initialized.
     pub fn open() -> Result<Self, OpusEncoderError> {
         let library = DynamicLibrary::open("libopus.so.0")?;
         let create = unsafe { library.symbol::<DecoderCreate>("opus_decoder_create")? };
@@ -206,17 +213,21 @@ impl OpusDecoder {
         })
     }
 
-    /// Decode one bounded Opus packet into interleaved PCM samples.
+    /// Decode one 20 ms stereo frame.
     ///
     /// # Errors
-    ///
-    /// Returns [`OpusEncoderError`] when decoding fails or the decoded sample
-    /// count cannot be represented safely.
+    /// Returns an error for an empty, oversized, malformed or non-20-ms packet.
     pub fn decode_frame(
         &mut self,
         packet: &EncodedOpusPacket,
     ) -> Result<Vec<i16>, OpusEncoderError> {
-        let mut samples = vec![0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS as usize];
+        if packet.bytes.is_empty() || packet.bytes.len() > MAX_OPUS_PACKET_BYTES {
+            return Err(OpusEncoderError("Opus packet size is invalid".to_owned()));
+        }
+        let mut samples =
+            vec![0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * usize::from(AUDIO_CHANNELS)];
+        // SAFETY: opaque decoder state and input are valid; samples has room for
+        // the fixed stereo frame supplied as the maximum decoder output size.
         let decoded = unsafe {
             (self.decode)(
                 self.decoder,
@@ -227,14 +238,9 @@ impl OpusDecoder {
                 0,
             )
         };
-        if decoded <= 0 {
+        if decoded != c_int::try_from(AUDIO_FRAME_SAMPLES_PER_CHANNEL).unwrap_or(960) {
             return Err(OpusEncoderError("Opus decode failed".to_owned()));
         }
-        let decoded_samples = usize::try_from(decoded)
-            .ok()
-            .and_then(|count| count.checked_mul(AUDIO_CHANNELS as usize))
-            .ok_or_else(|| OpusEncoderError("Opus decoded sample count overflowed".to_owned()))?;
-        samples.truncate(decoded_samples);
         Ok(samples)
     }
 }
@@ -313,6 +319,11 @@ mod tests {
         let packet = encoder.encode_frame(1, &samples).expect("silence packet");
         assert!(!packet.bytes.is_empty());
         assert!(packet.bytes.len() <= MAX_OPUS_PACKET_BYTES);
+        assert_eq!(
+            packet.bytes.capacity(),
+            packet.bytes.len(),
+            "retention accounts allocated payload, not unused encoder scratch"
+        );
         assert_eq!(packet.duration_ns, AUDIO_FRAME_DURATION_NS);
     }
 }

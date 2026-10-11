@@ -572,7 +572,13 @@ not rerun for this follow-up.
 Runtime-efficiency regression coverage includes exclusive startup ownership,
 bounded/private history and escaping, audio progress after retention fills,
 nonblocking snapshot cancellation, decoded synthetic MKV/MP4 with audio gaps,
-failed streamed-output cleanup, cache invalidation, and polling during a delayed
+failed streamed-output cleanup, microphone-only/mixed MKV/MP4 decode with one
+audible track, microphone speech through system gaps, sample-offset mixing,
+malformed-audio rejection, assembler/capture independence, two-input epoch reset,
+backend cycling, route/stall recovery, and microphone preference lifecycle locks.
+Built WebKit fixtures cover pending/successful/failed microphone writes, keyboard
+focus, narrow layouts, and the recording-folder control. Coverage also includes
+cache invalidation and polling during a delayed
 or failed update check. All media fixtures use private generated data. The
 WebKit scripts share the native renderer default through
 `output/tauri-redunar/tests/webkit_fixture.py`

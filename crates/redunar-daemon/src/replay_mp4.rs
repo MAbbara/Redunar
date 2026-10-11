@@ -14,7 +14,7 @@ const MICROPHONE_TRACK_ID: u32 = 3;
 const MAX_FRAGMENT_DURATION_NS: u64 = 30_000_000_000;
 const MAX_STREAM_FRAGMENT_BYTES: usize = 8 * 1024 * 1024;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn write_streaming_mp4(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -305,9 +305,7 @@ pub fn write_audio_video_mp4(
 /// Write fragmented MP4 with independent system and optional microphone tracks.
 ///
 /// # Errors
-///
-/// Returns [`Mp4VideoError`] when the ring, packets, audio, timestamps, or
-/// destination cannot be encoded successfully.
+/// Returns an error on unsupported codecs, invalid packets or output failure.
 pub fn write_audio_video_mp4_tracks(
     destination: &mut impl Write,
     stream: &ReplayVideoStream,
@@ -407,24 +405,13 @@ pub fn write_audio_video_mp4_tracks(
     })
 }
 
-#[allow(dead_code)]
-fn moov_with_audio(
-    stream: &ReplayVideoStream,
-    audio: &ReplayAudioSnapshot,
-) -> Result<Vec<u8>, Mp4VideoError> {
-    let tracks = ReplayAudioTracks {
-        system: audio.clone(),
-        microphone: None,
-    };
-    moov_with_audio_tracks(stream, &tracks)
-}
-
 fn moov_with_audio_tracks(
     stream: &ReplayVideoStream,
     audio: &ReplayAudioTracks,
 ) -> Result<Vec<u8>, Mp4VideoError> {
     let mut contents = Vec::new();
-    push_box(&mut contents, *b"mvhd", &mvhd_for_next_track(3))?;
+    let next_track = if audio.microphone.is_some() { 4 } else { 3 };
+    push_box(&mut contents, *b"mvhd", &mvhd_for_next_track(next_track))?;
     push_box(&mut contents, *b"trak", &trak(stream)?)?;
     push_box(
         &mut contents,

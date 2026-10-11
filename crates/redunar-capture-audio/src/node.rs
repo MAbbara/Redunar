@@ -100,16 +100,6 @@ pub fn discover_game_audio_node(
     }
 }
 
-/// Select the requested `PipeWire` sink as a fallback monitor target when a
-/// game's stream does not expose process ownership metadata. Without a
-/// preferred sink, exactly one valid sink must exist; choosing an arbitrary
-/// device can silently record an idle HDMI or network output.
-///
-/// # Errors
-///
-/// Returns [`GameAudioNodeError`] when the registry is oversized, malformed,
-/// or a candidate sink has malformed metadata.
-///
 /// Select one microphone source from `PipeWire` registry metadata.
 ///
 /// A preferred node name is used when supplied; without one exactly one
@@ -158,10 +148,15 @@ pub fn discover_microphone_node(
     }
 }
 
+/// Select the requested `PipeWire` sink as a fallback monitor target when a
+/// game's stream does not expose process ownership metadata. Without a
+/// preferred sink, exactly one valid sink must exist; choosing an arbitrary
+/// device can silently record an idle HDMI or network output.
+///
 /// # Errors
 ///
 /// Returns [`GameAudioNodeError`] when the registry is oversized, malformed,
-/// or contains multiple possible fallback sinks.
+/// or a candidate sink has malformed metadata.
 pub fn discover_output_monitor_node(
     registry: &[u8],
     preferred_node_name: Option<&str>,

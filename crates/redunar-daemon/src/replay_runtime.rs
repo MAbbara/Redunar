@@ -240,6 +240,7 @@ impl ProductionReplayRuntime {
         state.last_encoded_progress = None;
         let mut audio = lock_unpoisoned(&self.audio);
         audio.buffer.clear();
+        audio.microphone_buffer.clear();
         audio.last_progress = None;
         audio.recording = true;
         state.pipeline = Some(pipeline);
@@ -331,6 +332,12 @@ impl ProductionReplayRuntime {
         replacement: Box<dyn HardwareEncoderBackend>,
     ) -> Result<(), ReplayRuntimeError> {
         let mut state = lock_unpoisoned(&self.inner);
+        // A deferred audio snapshot must not read a replacement epoch while
+        // assembling pinned video from the old one. Cancel that save before
+        // discarding either audio timeline; already committed clips survive.
+        if let Some(cancel) = &state.save_cancel {
+            cancel.store(true, Ordering::Release);
+        }
         let pipeline = state
             .pipeline
             .as_mut()
@@ -349,6 +356,7 @@ impl ProductionReplayRuntime {
         }
         let mut audio = lock_unpoisoned(&self.audio);
         audio.buffer.clear();
+        audio.microphone_buffer.clear();
         audio.last_progress = None;
         Ok(())
     }
@@ -476,16 +484,20 @@ impl ProductionReplayRuntime {
                 "Instant Replay is still buffering; wait at least one second before saving",
             ));
         }
-        let result =
-            pipeline.save_spooled_replay_as_with_audio_tracks(duration, output_format, || {
-                let audio = lock_unpoisoned(&self.audio);
-                crate::replay_audio::mix_audio_tracks(crate::ReplayAudioTracks {
-                    system: audio.buffer.snapshot_between(0, u64::MAX),
+        let shared_audio = Arc::clone(&self.audio);
+        let result = pipeline.save_spooled_replay_as_with_audio_tracks(
+            duration,
+            output_format,
+            move |start, end| {
+                let audio = lock_unpoisoned(&shared_audio);
+                crate::ReplayAudioTracks {
+                    system: audio.buffer.snapshot_between(start, end),
                     microphone: audio
                         .microphone_recording
-                        .then(|| audio.microphone_buffer.snapshot_between(0, u64::MAX)),
-                })
-            });
+                        .then(|| audio.microphone_buffer.snapshot_between(start, end)),
+                }
+            },
+        );
         let completed = pipeline.take_completed_inputs();
         if enqueue_completed(state, completed).is_err() {
             mark_failed(state, &self.audio, ReplayFailure::EncoderFailed);
@@ -622,6 +634,7 @@ fn mark_failed(
     let mut audio = lock_unpoisoned(audio);
     audio.recording = false;
     audio.buffer.clear();
+    audio.microphone_buffer.clear();
     state.status.phase = ReplayPhase::Failed;
     state.status.last_failure = Some(failure);
 }

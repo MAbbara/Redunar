@@ -382,9 +382,9 @@ impl ReplayHardwarePipeline {
         &mut self,
         duration: ReplayDuration,
         output_format: ReplayOutputFormat,
-        audio_snapshot: impl FnOnce() -> ReplayAudioSnapshot,
+        audio_snapshot: impl FnOnce() -> ReplayAudioSnapshot + Send + 'static,
     ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
-        self.save_spooled_replay_as_with_audio_tracks(duration, output_format, || {
+        self.save_spooled_replay_as_with_audio_tracks(duration, output_format, move |_, _| {
             ReplayAudioTracks {
                 system: audio_snapshot(),
                 microphone: None,
@@ -396,7 +396,7 @@ impl ReplayHardwarePipeline {
         &mut self,
         duration: ReplayDuration,
         output_format: ReplayOutputFormat,
-        audio_snapshot: impl FnOnce() -> ReplayAudioTracks,
+        audio_snapshot: impl FnOnce(u64, u64) -> ReplayAudioTracks + Send + 'static,
     ) -> Result<ReplayAssemblyJob, ReplayPipelineError> {
         if self.phase != ReplayPipelinePhase::Buffering {
             return Err(ReplayPipelineError::InvalidLifecycle);
@@ -425,13 +425,13 @@ impl ReplayHardwarePipeline {
         // startup fails. The next frame must still resume at a keyframe.
         self.last_keyframe_request_timestamp_ns = None;
         let job = spool
-            .save_async_tracks_as(
+            .save_async_tracks_with_audio(
                 duration,
                 self.settings,
                 self.flow.stream().clone(),
                 self.store.clone(),
                 output_format,
-                audio_snapshot(),
+                audio_snapshot,
             )
             .map_err(|error| {
                 if error.is_insufficient_history() {
@@ -659,6 +659,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use std::time::Instant;
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -1198,6 +1200,123 @@ mod tests {
         );
         pipeline.shutdown().expect("shutdown");
         assert_eq!(shutdowns.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn audio_snapshot_runs_in_assembler_with_selected_window_and_without_capture_lock() {
+        let fixture = Fixture::new();
+        let settings = ReplaySettings::default();
+        let store = fixture.store();
+        let spool = ReplaySegmentSpool::open(fixture.root.join("spool"), settings).unwrap();
+        let mut pipeline = ReplayHardwarePipeline::new(
+            settings,
+            store,
+            Box::new(FakeBackend::new(1920, 1080, Arc::new(AtomicUsize::new(0)))),
+        )
+        .unwrap()
+        .with_spool(spool);
+        for (position, index) in [
+            1, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960, 1020,
+            1080, 1140, 1200,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            pipeline
+                .submit_frame(index, frame(&fixture.root, index, 1920, 1080))
+                .unwrap();
+            let _ = pipeline.take_completed_inputs();
+            // The four-item spool queue intentionally rejects burst submissions;
+            // wait for each fixture packet to be accounted before the next one.
+            let deadline = Instant::now() + std::time::Duration::from_secs(2);
+            while pipeline.spool_stats().unwrap().accepted_packets
+                < u64::try_from(position + 1).unwrap()
+            {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        let (entered, window) = std::sync::mpsc::channel();
+        let (release, continue_mix) = std::sync::mpsc::channel();
+        let caller = std::thread::current().id();
+        let job = pipeline
+            .save_spooled_replay_as_with_audio_tracks(
+                ReplayDuration::Seconds15,
+                ReplayOutputFormat::Matroska,
+                move |start, end| {
+                    assert_ne!(std::thread::current().id(), caller);
+                    entered.send((start, end)).unwrap();
+                    continue_mix
+                        .recv_timeout(std::time::Duration::from_secs(2))
+                        .unwrap();
+                    ReplayAudioTracks {
+                        system: ReplayAudioSnapshot {
+                            stream: redunar_capture_audio::OpusStreamDescription::default(),
+                            packets: Vec::new(),
+                        },
+                        microphone: None,
+                    }
+                },
+            )
+            .unwrap();
+        let (start, end) = window
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(start > 0);
+        assert!(end - start <= 15_000_000_000);
+        // Assembly remains deliberately blocked here; subsequent frames must
+        // still be accepted by the same active encoder and disk spool.
+        pipeline
+            .submit_frame(1201, frame(&fixture.root, 1201, 1920, 1080))
+            .unwrap();
+        release.send(()).unwrap();
+        assert!(job.join().unwrap().path.is_file());
+        pipeline.shutdown().unwrap();
+    }
+
+    #[test]
+    fn runtime_resize_discards_both_audio_epochs_and_retains_microphone_mode() {
+        let fixture = Fixture::new();
+        let settings = ReplaySettings::default();
+        let store = fixture.store();
+        let spool = ReplaySegmentSpool::open(fixture.root.join("spool"), settings).unwrap();
+        let pipeline = ReplayHardwarePipeline::new(
+            settings,
+            store,
+            Box::new(FakeBackend::new(1920, 1080, Arc::new(AtomicUsize::new(0)))),
+        )
+        .unwrap()
+        .with_spool(spool);
+        let runtime = crate::ProductionReplayRuntime::unavailable(settings);
+        runtime
+            .start_validated_pipeline(
+                settings,
+                pipeline,
+                crate::ReplayBackendReadiness::fully_verified(),
+            )
+            .unwrap();
+        runtime.enable_microphone_recording();
+        let packet = redunar_capture_audio::EncodedOpusPacket {
+            timestamp_ns: 0,
+            duration_ns: 20_000_000,
+            bytes: vec![1, 2, 3],
+        };
+        runtime.submit_audio(packet.clone()).unwrap();
+        runtime.submit_microphone_audio(packet.clone()).unwrap();
+        runtime
+            .reset_backend(Box::new(FakeBackend::new(
+                1280,
+                720,
+                Arc::new(AtomicUsize::new(0)),
+            )))
+            .unwrap();
+        runtime
+            .submit_audio(packet.clone())
+            .expect("system timestamp restarts in new epoch");
+        runtime
+            .submit_microphone_audio(packet)
+            .expect("microphone timestamp restarts in new epoch");
+        runtime.shutdown().unwrap();
     }
 
     #[test]

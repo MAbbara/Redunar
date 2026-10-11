@@ -122,8 +122,12 @@ as palette and layout changes. Renderer ABI details belong in
 architecture/component documentation.
 
 Automatic replay has no global/per-game Off selector. Recording mode and quality
-configuration is locked until the owned game closes; this must not block an
-otherwise valid visibility-only save. The MKV/MP4 save container may change
+configuration and the global microphone toggle are locked through launch,
+recording and teardown; this must not block an
+otherwise valid visibility-only save. Microphone help states that changes apply
+to the next game launch, and failed writes restore the saved toggle value.
+The Replay panel retains the recording-folder control and its resolved path.
+The MKV/MP4 save container may change
 during a session and applies to future saves. Menu/save shortcuts may all be
 cleared. Global Replay settings offer short **60 FPS** and **Variable FPS**
 choices. Older fixed 30/120 FPS profiles remain readable and distinct. Variable

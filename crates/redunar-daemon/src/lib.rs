@@ -20,6 +20,7 @@ mod module_state;
 mod monitor;
 mod replay;
 mod replay_audio;
+mod replay_audio_mix;
 mod replay_clip_games;
 mod replay_control;
 mod replay_diagnostics;
@@ -998,31 +999,23 @@ impl RedunarService {
         Ok(preferences)
     }
 
-    /// Select the container used for future Replay saves and update the live
-    /// recorder without restarting the active game session.
+    /// Set microphone capture for the next game session.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the private Replay preferences cannot be loaded or
-    /// replaced atomically.
-    /// Set microphone capture mode for future Replay sessions.
-    ///
-    /// Microphone capture is Off by default; changing this setting never
-    /// interrupts an active video or system-audio pipeline.
+    /// Returns an error if a session is launching/running/ending or preferences
+    /// cannot be loaded or saved. Active capture is never labelled disabled.
     pub fn set_replay_microphone(
         &self,
         microphone: MicrophoneMode,
     ) -> Result<ReplayPreferences, ReplayPreferencesError> {
-        let preferences = replay_preferences::set_microphone(&self.state_directory, microphone)?;
-        self.publish_replay_preferences(&preferences);
-        Ok(preferences)
+        self.game_session_coordinator()
+            .set_microphone_mode(microphone)
     }
 
+    /// Select the container used for future Replay saves, including this session.
     ///
     /// # Errors
-    ///
-    /// Returns an error if preferences cannot be persisted or the active
-    /// replay runtime cannot apply the selected format.
+    /// Returns an error if private Replay preferences cannot be loaded or saved.
     pub fn set_replay_output_format(
         &self,
         output_format: ReplayOutputFormat,

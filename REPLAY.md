@@ -271,9 +271,12 @@ exactly one recorded session window.
 Replay records the default output monitor: the same mixed audio the user hears.
 It does not depend on game-process ownership. Microphone capture is enabled by
 default using the system-selected input; it can be switched off in Replay
-settings. When enabled it is captured on a separate bounded timeline and mixed into the
-system track during save, so VLC and other players receive one complete audio
-stream. Device selection is best effort and a missing microphone never
+settings between game sessions. The native service rejects microphone changes
+through launch, recording and teardown; a failed write restores the saved UI
+value and leaves the control available to retry. Version 1–6 preferences migrate
+with microphone capture off. When enabled it is captured on a separate bounded
+timeline and mixed into one Opus track during save, so VLC and other players
+receive system sound and microphone speech in their selected audio stream. Device selection is best effort and a missing microphone never
 stops video or system-output audio. System-output capture deliberately includes
 other applications that play through the same output, so it must be described as
 system-output audio rather than isolated game audio.
@@ -292,9 +295,17 @@ stereo PCM, bounded 20 ms Opus packets, and timestamped muxing. Microphone
 input uses the same packet and clock contract, with its own bounded timeline. The
 worker puts encoded audio into bounded timelines, so hardware video encoding and
 the save-time encoder drain cannot stall audio ingestion. A save reads the audio
-snapshot after draining video output, mixes the system and microphone timelines,
-and includes the clip tail.
-The audio timeline is cleared when the video epoch resets or Replay stops.
+snapshot for the selected video window after draining video output, including
+the clip tail. The assembler then mixes outside the runtime and audio locks,
+with one decoded frame per input and cancellation checks on each output frame.
+Sample offsets align overlapping frames. Microphone speech survives missing
+system packets, and a microphone-only clip uses that input as its sole audio
+track. Gaps in both inputs remain timestamp gaps; decode/encode failures fail
+the save instead of silently producing separate tracks. Coincident PCM peaks
+saturate safely; a silent input does not halve the other input's volume.
+Both audio timelines are cleared when the video epoch resets or Replay stops.
+A resize cancels an unfinished save before resetting its audio epoch; already
+committed clips are retained.
 Audio activity tracks successful packet ingestion time independently of retained
 packet count, so a full rolling buffer continues to report actual progress.
 Because the PCM helpers do not provide timestamps, capture advances in 20 ms
@@ -313,6 +324,13 @@ stalled transport that must be restarted. When both backends are available, a
 failed or stalled recorder is retried through the other backend instead of
 repeatedly selecting the same broken route. Older PulseAudio clients without
 `pactl get-default-sink` use the long-standing `pactl info` result.
+The microphone has its own route watcher and the same retry/stall ownership
+rules. Default input discovery resolves `wpctl` metadata or `pactl` before
+selecting a PipeWire source, so multiple physical inputs do not make the
+configured default ambiguous. Explicit selected-input names remain supported
+by the native API. Older PulseAudio clients use `pactl info` in the C locale
+when `get-default-source` is unavailable. Failed helpers are killed and reaped
+before any retry; discovery does not block active PCM reads.
 
 Redunar therefore requires either a working PulseAudio-compatible server with
 `pactl` and `parec`, or a working PipeWire server with `pw-dump`, `wpctl`, and

@@ -114,40 +114,64 @@ impl AudioCaptureSource {
     }
 }
 
-/// Select the strongest available Linux output-capture route.
-///
-/// `PulseAudio`'s default monitor is preferred because it works with both a real
-/// `PulseAudio` server and `PipeWire`'s Pulse server. A direct `PipeWire` default
-/// output remains available when the Pulse compatibility service is absent.
-///
-/// # Errors
-///
-/// Returns [`AudioCaptureError`] when neither supported sound server exposes a
-/// usable output route.
 /// Find available microphone input routes in preference order.
 ///
-/// The native `PipeWire` route is preferred when exactly one usable default
-/// source is exposed; `PulseAudio` remains the compatibility fallback.
+/// Resolves the desktop default input, with native `PipeWire` preferred and
+/// `PulseAudio` as a compatibility fallback.
 #[must_use]
 pub fn discover_microphone_audio_sources() -> Vec<MicrophoneAudioSource> {
+    discover_microphone_audio_sources_for(None)
+}
+
+/// Resolve a saved node name or the desktop-selected default input.
+/// Explicit selection never silently substitutes the current default.
+#[must_use]
+pub fn discover_microphone_audio_sources_for(selected: Option<&str>) -> Vec<MicrophoneAudioSource> {
+    let preferred = selected
+        .map(str::to_owned)
+        .or_else(inspect_default_source_name);
     let mut sources = Vec::with_capacity(2);
     if system_utility(PW_CAT_PATH, "pw-cat").is_some()
         && let Ok(registry) = inspect_pipewire_registry()
-        && let Ok(Some(source)) = discover_microphone_node(&registry, None)
+        && let Ok(Some(source)) = discover_microphone_node(&registry, preferred.as_deref())
     {
         sources.push(MicrophoneAudioSource::PipeWire(source));
     }
-    if let Some(source_name) = discover_pulse_default_source() {
+    if system_utility(PAREC_PATH, "parec").is_some()
+        && let Some(source_name) = selected.and_then(valid_sink_name).or_else(|| {
+            selected
+                .is_none()
+                .then(inspect_pactl_default_source_name)
+                .flatten()
+        })
+    {
         sources.push(MicrophoneAudioSource::PulseAudio { source_name });
     }
     sources
 }
 
-/// Discover the first usable system-output capture route.
+fn inspect_default_source_name() -> Option<String> {
+    if let Some(wpctl) = system_utility(WPCTL_PATH, "wpctl")
+        && let Ok(output) = run_discovery_command(
+            Command::new(wpctl).args(["inspect", "@DEFAULT_AUDIO_SOURCE@"]),
+            64 * 1024,
+        )
+        && let Some(name) = parse_default_sink_name(&output)
+    {
+        return Some(name);
+    }
+    inspect_pactl_default_source_name()
+}
+
+/// Select the strongest available Linux output-capture route.
+///
+/// The native `PipeWire` monitor is preferred when available. `PulseAudio`'s
+/// default monitor remains a fallback for native Pulse or compatibility servers.
 ///
 /// # Errors
 ///
-/// Returns [`AudioCaptureError`] when no supported output route is available.
+/// Returns [`AudioCaptureError`] when neither supported sound server exposes a
+/// usable output route.
 pub fn discover_system_audio_source() -> Result<AudioCaptureSource, AudioCaptureError> {
     discover_system_audio_sources()?
         .into_iter()
@@ -310,12 +334,21 @@ fn read_discovery_output(
     }
 }
 
-fn discover_pulse_default_source() -> Option<String> {
+fn inspect_pactl_default_source_name() -> Option<String> {
     let pactl = system_utility(PACTL_PATH, "pactl")?;
-    let output =
-        run_discovery_command(Command::new(pactl).args(["get-default-source"]), 4 * 1024).ok()?;
-    let value = std::str::from_utf8(&output).ok()?.trim();
-    valid_sink_name(value)
+    if let Ok(output) =
+        run_discovery_command(Command::new(&pactl).arg("get-default-source"), 4 * 1024)
+        && let Some(name) = parse_pactl_default_sink_name(&output)
+    {
+        return Some(name);
+    }
+    // Older Pulse clients expose the same selection in the stable info format.
+    let output = run_discovery_command(
+        Command::new(pactl).env("LC_ALL", "C").arg("info"),
+        64 * 1024,
+    )
+    .ok()?;
+    parse_pactl_info_default_name(&output, "Default Source")
 }
 
 fn discover_pulse_default_monitor() -> Option<AudioCaptureSource> {
@@ -385,12 +418,16 @@ fn parse_pactl_default_sink_name(output: &[u8]) -> Option<String> {
 }
 
 fn parse_pactl_info_default_sink_name(output: &[u8]) -> Option<String> {
+    parse_pactl_info_default_name(output, "Default Sink")
+}
+
+fn parse_pactl_info_default_name(output: &[u8], expected_label: &str) -> Option<String> {
     let text = std::str::from_utf8(output).ok()?;
     let value = text.lines().find_map(|line| {
         let (label, value) = line.split_once(':')?;
         label
             .trim()
-            .eq_ignore_ascii_case("Default Sink")
+            .eq_ignore_ascii_case(expected_label)
             .then_some(value.trim())
     })?;
     valid_sink_name(value)
@@ -572,12 +609,10 @@ pub struct SystemAudioCapture {
 }
 
 impl SystemAudioCapture {
-    /// Start capturing from the selected system-output route.
+    /// Start a raw capture child on the requested route.
     ///
     /// # Errors
-    ///
-    /// Returns [`AudioCaptureError`] when the capture command or Opus encoder
-    /// cannot be initialized.
+    /// Returns an error if the utility, pipe or Opus encoder cannot start.
     pub fn start(
         source: &AudioCaptureSource,
         timeline_timestamp_ns: u64,
@@ -593,11 +628,10 @@ impl SystemAudioCapture {
         })
     }
 
-    /// Read and encode at most one packet within `timeout`.
+    /// Read one bounded frame without waiting beyond the supplied timeout.
     ///
     /// # Errors
-    ///
-    /// Returns [`AudioCaptureError`] when the capture stream or encoder fails.
+    /// Returns an error on transport failure, invalid PCM or excessive clock drift.
     pub fn next_packet(
         &mut self,
         timeout: Duration,
@@ -612,12 +646,10 @@ pub struct MicrophoneAudioCapture {
 }
 
 impl MicrophoneAudioCapture {
-    /// Start capturing from the selected microphone route.
+    /// Start a raw capture child on the requested route.
     ///
     /// # Errors
-    ///
-    /// Returns [`AudioCaptureError`] when the capture command or Opus encoder
-    /// cannot be initialized.
+    /// Returns an error if the utility, pipe or Opus encoder cannot start.
     pub fn start(
         source: &MicrophoneAudioSource,
         timeline_timestamp_ns: u64,
@@ -633,11 +665,10 @@ impl MicrophoneAudioCapture {
         })
     }
 
-    /// Read and encode at most one packet within `timeout`.
+    /// Read one bounded frame without waiting beyond the supplied timeout.
     ///
     /// # Errors
-    ///
-    /// Returns [`AudioCaptureError`] when the capture stream or encoder fails.
+    /// Returns an error on transport failure, invalid PCM or excessive clock drift.
     pub fn next_packet(
         &mut self,
         timeout: Duration,
@@ -780,6 +811,24 @@ fn capture_command(source: &AudioCaptureSource) -> Result<Command, AudioCaptureE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_input_metadata_and_legacy_pulse_info_are_selected_without_guessing() {
+        assert_eq!(
+            parse_default_sink_name(b"node.name = \"usb-mic\"\n").as_deref(),
+            Some("usb-mic")
+        );
+        let info = b"Default Sink: speakers\nDefault Source: usb-mic\n";
+        assert_eq!(
+            parse_pactl_info_default_name(info, "Default Source").as_deref(),
+            Some("usb-mic")
+        );
+        assert_eq!(
+            parse_pactl_info_default_name(b"Default Source: \n", "Default Source"),
+            None
+        );
+        assert_eq!(parse_pactl_info_default_name(info, "Unknown"), None);
+    }
 
     #[test]
     fn default_sink_parser_accepts_wpctl_node_name() {

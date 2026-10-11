@@ -30,6 +30,7 @@ const posterFixture=artworkFixture(300,450,'Poster');
 const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
 const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
+function replayPreferencesFixture(){return {microphone_mode:bridge.microphone||'off',microphone_source:null,initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};}
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/fixture/game',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
 window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args={})=>{
  bridge.calls.push({command,args:structuredClone(args)});
@@ -70,9 +71,10 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
  if(command==='update_game_launch'){bridge.launchArgs=args.arguments;return structuredClone(games);}
  if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
- if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {close_overlay_on_outside_click:args.closeOnOutsideClick,overlay_shortcut:values.shortcuts.overlay||''};}
+ if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {...replayPreferencesFixture(),overlay_shortcut:values.shortcuts.overlay||''};}
  if(command==='steam_setup_status'){if(bridge.failSteamSetup)throw Error('Fixture Steam setup unavailable');return bridge.steamSetup||{available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};}
- if(command==='replay_preferences')return {initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};
+ if(command==='set_replay_microphone'){await new Promise(resolve=>setTimeout(resolve,80));if(bridge.failMicrophone)throw Error('Fixture microphone write failed');bridge.microphone=args.mode;return replayPreferencesFixture();}
+ if(command==='replay_preferences')return replayPreferencesFixture();
  if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
  if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
  if(command==='shortcut_status'&&bridge.shortcutUnavailable)return {state:'Unavailable',message:'No readable keyboard input device'};
@@ -84,7 +86,7 @@ window.check=(condition,message)=>{if(!condition)throw new Error(message)};
 window.q=s=>document.querySelector(s);
 window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
 """
-resolution_copy = re.search(r'Some\(ReplaySourceRejection::DimensionsUnsupported\) =>\s*"([^"]+)"', (NATIVE/'src-tauri/src/runtime.rs').read_text()).group(1)
+resolution_copy = re.search(r'Some\(ReplaySourceRejection::DimensionsUnsupported\) =>\s*(?:\{\s*)?"([^"]+)"', (NATIVE/'src-tauri/src/runtime.rs').read_text()).group(1)
 fixture = "const fixtureResolutionRejection=" + json.dumps(resolution_copy) + ";" + fixture
 fixture = "window.fixturePalettes=" + (NATIVE / "ui/overlay-palettes.json").read_text() + ";" + fixture
 manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
@@ -255,6 +257,20 @@ try:
     js("click('[data-global-tab=replay]')");pump()
     test('Automatic replay replaces the global off control',"check(!q('[data-global=replayEnabled]'),'no replay off control');check(q('#workspace').textContent.includes('Automatic'),'automatic status');q('[data-replay-preference=outside]').click();",350)
     test('Outside click preference does not resend a stale shortcut',"const write=bridge.calls.findLast(c=>c.command==='set_replay_overlay_behavior');check(Object.keys(write.args).length===1&&Object.hasOwn(write.args,'closeOnOutsideClick'),'only changed preference sent');check(values.shortcuts.overlay==='Ctrl+Shift+T','new menu shortcut retained');")
+    js("bridge.idle=false;window.dispatchEvent(new Event('focus'))")
+    wait_for("q('[data-replay-preference=microphone]').disabled")
+    test('Microphone mode is locked during the current game session',"check(q('[data-replay-preference=microphone]').disabled,'active-session lock');check(q('#workspace').textContent.includes('end the current session'),'honest microphone timing');check(q('#workspace').textContent.includes('/fixture/Videos/Redunar Replays'),'visible save directory');bridge.idle=true;")
+    wait_for("!q('[data-replay-preference=microphone]').disabled")
+    test('Microphone toggle is busy until the native write completes',"q('[data-replay-preference=microphone]').click();check(q('[data-replay-preference=microphone]').disabled,'pending write disabled');check(!q('[data-replay-preference=microphone]').checked,'saved state retained while pending');",250)
+    test('Microphone toggle recovers after success without changing tabs',"const input=q('[data-replay-preference=microphone]');check(input.checked&&!input.disabled,'success checked and interactive');input.focus();check(document.activeElement===input,'keyboard focus');check(q('#toast').textContent.includes('new sessions'),'next-session notice');input.click();",250)
+    test('Microphone Off and native payload remain truthful',"check(!q('[data-replay-preference=microphone]').checked&&!q('[data-replay-preference=microphone]').disabled,'off and interactive');check(bridge.calls.findLast(c=>c.command==='set_replay_microphone').args.mode==='off','off payload');check(q('#toast').textContent.includes('disabled for new sessions'),'off notice');bridge.failMicrophone=true;q('[data-replay-preference=microphone]').click();",250)
+    test('Microphone failed write restores saved state and retry availability',"check(!q('[data-replay-preference=microphone]').checked&&!q('[data-replay-preference=microphone]').disabled,'failed write recovered');check(q('#toast').textContent.includes('Fixture microphone write failed'),'honest failure');bridge.failMicrophone=false;")
+    snap('microphone-normal')
+    window.resize(640,950);pump()
+    test('Microphone and save directory fit a compact workspace',"q('[data-replay-preference=microphone]').scrollIntoView({block:'center'});check(document.documentElement.scrollWidth<=innerWidth,'no compact overflow');")
+    snap('microphone-compact')
+    window.resize(1440,1000);pump()
+    js("bridge.idle=true")
     route('history');snap('history')
     js("bridge.historyFixture=Array.from({length:20},(_,i)=>({id:i+1,game:'Scroll test '+i,started_unix:1789300000-i*86400,duration_seconds:1800,average_fps:60,timeline:[{elapsed_seconds:0,fps:60},{elapsed_seconds:1800,fps:60}]}));click('[data-action=reload-history]')");pump()
     test('History scrollbar sits between cards and the detail panel',"const rail=q('.history-catalog').getBoundingClientRect(),list=q('#session-list'),viewport=list.getBoundingClientRect(),card=q('.history-row').getBoundingClientRect(),detail=q('.history-detail').getBoundingClientRect();check(list.scrollHeight>list.clientHeight,'overflow fixture');check(viewport.right>rail.right+10,'scrollbar moved into gap');check(viewport.right<detail.left-2,'scrollbar stays clear of detail');check(card.right<rail.right,'cards stay inside rail');check(viewport.right-card.right>20,'scrollbar cannot overlay cards');")

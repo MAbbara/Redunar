@@ -18,8 +18,8 @@ pub use opus::{
 };
 pub use source::{
     AudioCaptureError, AudioCaptureSource, MicrophoneAudioCapture, MicrophoneAudioSource,
-    SystemAudioCapture, discover_microphone_audio_sources, discover_system_audio_source,
-    discover_system_audio_sources, monotonic_now_ns,
+    SystemAudioCapture, discover_microphone_audio_sources, discover_microphone_audio_sources_for,
+    discover_system_audio_source, discover_system_audio_sources, monotonic_now_ns,
 };
 
 pub const AUDIO_SAMPLE_RATE: u32 = 48_000;
