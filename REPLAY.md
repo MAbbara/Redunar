@@ -271,9 +271,9 @@ exactly one recorded session window.
 Replay records the default output monitor: the same mixed audio the user hears.
 It does not depend on game-process ownership. Microphone capture is enabled by
 default using the system-selected input; it can be switched off in Replay
-settings. When enabled it is retained as a
-separate Opus track so users can mute or edit commentary without baking it into
-system audio. Device selection is best effort and a missing microphone never
+settings. When enabled it is captured on a separate bounded timeline and mixed into the
+system track during save, so VLC and other players receive one complete audio
+stream. Device selection is best effort and a missing microphone never
 stops video or system-output audio. System-output capture deliberately includes
 other applications that play through the same output, so it must be described as
 system-output audio rather than isolated game audio.
@@ -289,11 +289,11 @@ monitor API now serves as the fallback for hosts without a usable native
 PipeWire route; it still works with a native PulseAudio server and with
 PipeWire's Pulse server. Both paths produce fixed 48 kHz
 stereo PCM, bounded 20 ms Opus packets, and timestamped muxing. Microphone
-input uses the same packet and clock contract, with its own bounded timeline and
-track identity. The worker
-puts encoded audio into a separate bounded timeline, so hardware video
-encoding and the save-time encoder drain cannot stall audio ingestion. A save
-reads the audio snapshot after draining video output to include the clip tail.
+input uses the same packet and clock contract, with its own bounded timeline. The
+worker puts encoded audio into bounded timelines, so hardware video encoding and
+the save-time encoder drain cannot stall audio ingestion. A save reads the audio
+snapshot after draining video output, mixes the system and microphone timelines,
+and includes the clip tail.
 The audio timeline is cleared when the video epoch resets or Replay stops.
 Audio activity tracks successful packet ingestion time independently of retained
 packet count, so a full rolling buffer continues to report actual progress.

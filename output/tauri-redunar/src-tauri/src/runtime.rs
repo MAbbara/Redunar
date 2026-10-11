@@ -304,9 +304,7 @@ mod replay_copy_tests {
 
     #[test]
     fn container_failure_is_not_reported_as_an_encoder_failure() {
-        assert!(
-            super::replay_failure_copy(ReplayFailure::EncoderFailed).contains("encoder failed")
-        );
+        assert!(super::replay_failure_copy(ReplayFailure::EncoderFailed).contains("encoder failed"));
         let packaging = super::replay_failure_copy(ReplayFailure::ContainerFailed);
         assert!(packaging.contains("package the recorded video"));
         assert!(!packaging.contains("encoder"));
