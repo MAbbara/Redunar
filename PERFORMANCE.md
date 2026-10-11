@@ -92,9 +92,14 @@ GBM topology selection runs once when creating the process allocator. Repeated
 presents do not rescan DRM or query device UUIDs; unchanged identity emits no
 additional datagram. These bounds do not establish NVIDIA frame-pacing performance.
 
-Encoded spool commands use a four-item nonblocking queue. Existing packet bounds
-limit worst-case queued payload; complete segments are bounded to 32 MiB/four
-seconds and 512 entries. The spool retains a 15-minute horizon, with bitrate-based
+Encoded spool commands use a 64-item nonblocking queue to absorb short encoder
+bursts. With the existing 8 MiB per-packet cap, queued payload can retain up to
+512 MiB, compared with 32 MiB at the previous four-item limit. Immutable payloads
+are shared with the rolling ring; these limits must not be added as independent
+copies. The queue bounds item count, not elapsed history: 64 frames represent
+about 1.07 seconds at 60 FPS or 0.27 seconds at 240 FPS. Sustained storage stalls
+can still overflow it and require keyframe recovery. Complete segments are
+bounded to 32 MiB/four seconds and 512 entries. The spool retains a 15-minute horizon, with bitrate-based
 disk limits rather than RAM proportional to the requested duration. Save work
 includes the active tail and preserves the store's 512 MiB filesystem reserve.
 Snapshot requests use the bounded command queue without waiting on the runtime
