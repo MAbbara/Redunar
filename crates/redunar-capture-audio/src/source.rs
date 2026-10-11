@@ -480,7 +480,7 @@ impl SystemAudioCapture {
             self.filled += count;
         }
         let mut samples = [0_i16; AUDIO_FRAME_SAMPLES_PER_CHANNEL * AUDIO_CHANNELS as usize];
-        for (sample, bytes) in samples.iter_mut().zip(self.pcm.chunks_exact(2)) {
+        for (sample, bytes) in samples.iter_mut().zip(self.pcm.as_chunks::<2>().0) {
             *sample = i16::from_le_bytes([bytes[0], bytes[1]]);
         }
         let live_timestamp_ns = self

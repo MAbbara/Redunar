@@ -1314,7 +1314,7 @@ fn game_audio_route_changed(
     receiver: &Receiver<Vec<redunar_capture_audio::AudioCaptureSource>>,
     source: &redunar_capture_audio::AudioCaptureSource,
 ) -> bool {
-    receiver.try_recv().ok().is_some_and(|updated| {
+    receiver.try_recv().is_ok_and(|updated| {
         // Discovery can temporarily omit one backend under load. A failed
         // lookup is not evidence that the current sink changed; the active
         // capture's stall/error path handles a genuinely removed backend.

@@ -113,7 +113,7 @@ impl CaptureSessionId {
             return Err(ProtocolError::new("capture session id has invalid length"));
         }
         let mut decoded = [0; 16];
-        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             decoded[index] = (decode_hex(pair[0])? << 4) | decode_hex(pair[1])?;
         }
         Self::new(decoded)

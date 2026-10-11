@@ -47,7 +47,9 @@ impl Icon {
             return Err("The tray icon is unavailable".into());
         }
         let argb = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
             .collect();
         Ok(Self {
