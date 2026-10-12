@@ -433,7 +433,10 @@ function modal(title,body) {
  $('#dialog').setAttribute('aria-labelledby','dialog-title');$('#dialog-title').setAttribute('tabindex','-1');$('#dialog-title').setAttribute('autofocus','');$('#dialog').showModal();enhancePrecisionSelects($('#dialog'));$('#dialog-title').focus({preventScroll:true});
 }
 function discoveryModal(candidates) {
- const alreadyImported=candidate=>games.some(game=>candidate.source==='Steam'&&candidate.source_id!=null&&game.steam_app_id===candidate.source_id||(candidate.launch_executable&&game.executable===candidate.launch_executable));
+ // Steam games share a launcher executable; only their app ID identifies the game.
+ const alreadyImported=candidate=>games.some(game=>candidate.source==='Steam'
+  ? candidate.source_id!=null&&game.steam_app_id===candidate.source_id
+  : Boolean(candidate.launch_executable&&game.executable===candidate.launch_executable));
   const rows=candidates.map(candidate=>{const existing=alreadyImported(candidate),importable=candidate.importable&&!existing;return `<label class="discovery-row ${importable?'':'unavailable'}"><input type="checkbox" name="candidateId" value="${escape(candidate.candidate_id)}" ${importable?'checked':''} ${importable?'':'disabled'}><span><strong>${escape(candidate.name)}</strong><small>${escape(candidate.source)}${candidate.source_id?` · ${candidate.source_id}`:''} · ${escape(candidate.install_directory)}</small>${existing?'<em>Already in Redunar library</em>':candidate.importable?`<code>${escape(candidate.launch_executable||'')}</code>`:'<em>No verified launch found on this system</em>'}</span></label>`}).join('');
  const hasImportable=candidates.some(c=>c.importable&&!alreadyImported(c));
  modal('Scan installed games',`<p>Review installed games found in local Steam libraries and desktop entries before adding them to your Redunar library. Discovery is read-only until you import the selected games.</p><form id="discovery-form"><h3>Installed entries</h3><div class="discovery-list">${rows||'<p class="empty">No installed games were found.</p>'}</div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit" ${hasImportable?'':'disabled'}>Import selected</button></div></form>`);
