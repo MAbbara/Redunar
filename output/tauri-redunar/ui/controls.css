@@ -40,3 +40,14 @@
 @media(max-width:1150px) and (min-width:1001px){.preset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.preset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .settings-save-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;position:sticky;bottom:16px;z-index:3;margin-top:24px;padding:16px 20px;border:1px solid #333;border-radius:9px;background:#141414;box-shadow:0 10px 28px #0008}.settings-save-bar>span{font-size:11px;color:var(--muted)}
+
+/* Discovery uses a full-row label and a stable checkbox instead of tiny native chrome. */
+.discovery-row input[type=checkbox]{appearance:none;-webkit-appearance:none;display:grid;place-content:center;flex:0 0 18px;width:18px;height:18px;padding:0;margin:1px 0 0;border:1px solid #686868;border-radius:4px;background:#121212;color:#ffadb2;cursor:pointer}
+.discovery-row input[type=checkbox]::before{content:'';width:5px;height:9px;border:solid currentColor;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg);visibility:hidden}
+.discovery-row input[type=checkbox]:checked{background:#30171c;border-color:var(--red)}
+.discovery-row input[type=checkbox]:checked::before{visibility:visible}
+.discovery-row:hover input[type=checkbox]:not(:disabled){border-color:#ff8288}
+.discovery-row input[type=checkbox]:focus-visible{outline:2px solid #ff8288;outline-offset:3px}
+.discovery-row input[type=checkbox]:disabled{background:#202020;border-color:#484848;color:var(--muted);cursor:default}
+.dialog-error{margin:0 0 20px;padding:12px 14px;border:1px solid #74323d;border-radius:6px;background:#241516;color:#ffadb2;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.dialog-error:focus{outline:2px solid #ff8288;outline-offset:3px}
