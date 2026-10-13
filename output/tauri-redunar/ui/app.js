@@ -429,11 +429,15 @@ function notify(text) {
  clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,4200);
 }
 function modal(title,body) {
+ $('#dialog-error').hidden=true;$('#dialog-error').textContent='';
  $('#dialog-title').textContent=title;$('#dialog-body').innerHTML=body;
  $('#dialog').setAttribute('aria-labelledby','dialog-title');$('#dialog-title').setAttribute('tabindex','-1');$('#dialog-title').setAttribute('autofocus','');$('#dialog').showModal();enhancePrecisionSelects($('#dialog'));$('#dialog-title').focus({preventScroll:true});
 }
 function discoveryModal(candidates) {
- const alreadyImported=candidate=>games.some(game=>candidate.source==='Steam'&&candidate.source_id!=null&&game.steam_app_id===candidate.source_id||(candidate.launch_executable&&game.executable===candidate.launch_executable));
+ // Steam games share a launcher executable; only their app ID identifies the game.
+ const alreadyImported=candidate=>games.some(game=>candidate.source==='Steam'
+  ? candidate.source_id!=null&&game.steam_app_id===candidate.source_id
+  : Boolean(candidate.launch_executable&&game.executable===candidate.launch_executable));
   const rows=candidates.map(candidate=>{const existing=alreadyImported(candidate),importable=candidate.importable&&!existing;return `<label class="discovery-row ${importable?'':'unavailable'}"><input type="checkbox" name="candidateId" value="${escape(candidate.candidate_id)}" ${importable?'checked':''} ${importable?'':'disabled'}><span><strong>${escape(candidate.name)}</strong><small>${escape(candidate.source)}${candidate.source_id?` · ${candidate.source_id}`:''} · ${escape(candidate.install_directory)}</small>${existing?'<em>Already in Redunar library</em>':candidate.importable?`<code>${escape(candidate.launch_executable||'')}</code>`:'<em>No verified launch found on this system</em>'}</span></label>`}).join('');
  const hasImportable=candidates.some(c=>c.importable&&!alreadyImported(c));
  modal('Scan installed games',`<p>Review installed games found in local Steam libraries and desktop entries before adding them to your Redunar library. Discovery is read-only until you import the selected games.</p><form id="discovery-form"><h3>Installed entries</h3><div class="discovery-list">${rows||'<p class="empty">No installed games were found.</p>'}</div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit" ${hasImportable?'':'disabled'}>Import selected</button></div></form>`);
@@ -896,11 +900,17 @@ async function poll() {
  try { if(!document.hidden)await refreshRuntime(); } catch(error) { notify(message(error)); }
  setTimeout(poll,pollDelay()); // Schedule after completion; slow reads never build a queue.
 }
+function reportActionError(error) {
+ const feedback=$('#dialog-error');
+ if($('#dialog').open){feedback.textContent=message(error);feedback.hidden=false;feedback.focus();}
+ else notify(message(error));
+}
 async function perform(action) {
  if(busy)return;
  busy=true;document.body.classList.add('native-busy');updateObservedElements();
+ $('#dialog-error').hidden=true;$('#dialog-error').textContent='';
  try { await action(); }
- catch(error){ notify(message(error)); }
+ catch(error){ reportActionError(error); }
  finally { busy=false;document.body.classList.remove('native-busy');updateObservedElements(); }
 }
 function showExportProgress(progress=0) {
@@ -1227,7 +1237,19 @@ document.addEventListener('change',event=>{
 document.addEventListener('submit',event=>{
  if(event.target.id==='trim-export-form'){event.preventDefault();const form=new FormData(event.target);runClipExport(String(form.get('fileName')),Number(form.get('start')),Number(form.get('end')));return;}
  if(event.target.id==='delete-clip-form'){event.preventDefault();const fileName=String(new FormData(event.target).get('fileName'));perform(async()=>{await call('delete_replay_clip',{fileName});if(selectedClip===fileName)selectedClip=null;await reloaders['reload-clips']();$('#dialog').close();render();notify('Clip deleted from the local replay store.');});return;}
- if(event.target.id==='discovery-form'){event.preventDefault();const form=new FormData(event.target),candidateIds=form.getAll('candidateId').map(String);if(!candidateIds.length){notify('Select at least one game to import.');return;}perform(async()=>{acceptGames(await call('import_discovered_games',{candidateIds}));$('#dialog').close();selectedGame=games.at(-1)?.id||selectedGame;render();const count=candidateIds.length;notify(`${count} game${count===1?'':'s'} imported into the local library.`);});return;}
+ if(event.target.id==='discovery-form'){
+  event.preventDefault();if(busy)return;
+  const form=new FormData(event.target),candidateIds=form.getAll('candidateId').map(String);
+  if(!candidateIds.length){reportActionError('Select at least one game to import.');return;}
+  const submit=event.target.querySelector('[type=submit]');
+  submit.disabled=true;submit.textContent='Importing…';
+  perform(async()=>{
+   acceptGames(await call('import_discovered_games',{candidateIds}));
+   $('#dialog').close();selectedGame=games.at(-1)?.id||selectedGame;render();
+   const count=candidateIds.length;notify(`${count} game${count===1?'':'s'} imported into the local library.`);
+  }).finally(()=>{submit.disabled=false;submit.textContent='Import selected';});
+  return;
+ }
  if(event.target.id==='edit-launch-form'){event.preventDefault();const form=new FormData(event.target);const args=String(form.get('arguments')||'').split(/\r?\n/).map(v=>v.trim()).filter(Boolean);const workingDirectory=String(form.get('workingDirectory')||'').trim()||null;perform(async()=>{acceptGames(await call('update_game_launch',{gameId:String(form.get('gameId')),executable:String(form.get('executable')).trim(),arguments:args,workingDirectory,expectedRevision:String(form.get('expectedRevision'))}));$('#dialog').close();render();notify('Launch settings saved.');});return;}
  if(event.target.id==='remove-game-form'){event.preventDefault();const gameId=String(new FormData(event.target).get('gameId'));perform(async()=>{acceptGames(await call('remove_game',{gameId}));selectedGame=games[0]?.id||null;$('#dialog').close();render();notify('Game removed from the local catalog.');});return;}
  if(event.target.id==='replay-folder-form'){event.preventDefault();const parent=String(new FormData(event.target).get('parent')).trim();perform(async()=>{replayPreferences=await call('set_replay_save_parent',{parent});await reloaders['reload-clips']();$('#dialog').close();render();notify('Replay folder saved.');});return;}

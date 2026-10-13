@@ -540,8 +540,11 @@ fn assert_mixed_audio(path: &std::path::Path) {
     );
     let samples = decode
         .stdout
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(f32::from_le_bytes)
         .collect::<Vec<_>>();
     assert!(samples.len() >= 95_000, "full clip tail remains audible");
     let middle_peak = samples[48_000..60_000]
