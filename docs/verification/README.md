@@ -1,5 +1,9 @@
 # Verification evidence
 
+- [October 13 Steam discovery review and Rust 1.98 validation](2026-10-13-library-discovery.md):
+  reviewed app-ID matching and import feedback, isolated production UI checks,
+  two behavior-preserving Clippy repairs and full offline validation.
+
 - [October 10 Steam X11 launch integration](2026-10-10-steam-x11.md):
   contributor update, selective preload cleanup, real-wrapper fixtures and
   offline compatibility/package checks; installed-game acceptance remains separate.

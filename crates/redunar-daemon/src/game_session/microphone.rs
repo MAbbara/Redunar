@@ -147,7 +147,7 @@ fn consume(
         }
         // A transient discovery failure is not evidence of a changed input.
         // A removed transport is still recovered by timeout/exit above.
-        if routes.try_recv().ok().is_some_and(|updated| {
+        if routes.try_recv().is_ok_and(|updated| {
             updated
                 .iter()
                 .find(|candidate| candidate.backend_name() == source.backend_name())
