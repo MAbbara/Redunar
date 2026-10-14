@@ -1,3 +1,4 @@
+use crate::replay_clip_labels::{self as labels, Label};
 use crate::{
     ReplayAudioSnapshot, ReplayAudioTracks, ReplayBudget, ReplayOutputFormat, ReplayRing,
     ReplayVideoStream, write_audio_video_matroska_tracks, write_audio_video_mp4_tracks,
@@ -9,7 +10,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -57,6 +58,9 @@ pub struct ReplayClipEntry {
     /// This is labeling data for the Recent captures view; a missing value
     /// never affects playback, export, or deletion.
     pub game_name: Option<String>,
+    /// Original generated identity, retained through user filename changes.
+    pub original_file_name: String,
+    pub favorite: bool,
 }
 
 /// Read-only inventory of the dedicated replay directory.
@@ -104,6 +108,20 @@ struct OwnedClip {
     path: PathBuf,
     bytes: u64,
     modified: SystemTime,
+    original_file_name: String,
+    favorite: bool,
+}
+
+impl OwnedClip {
+    fn generated(path: PathBuf, bytes: u64, modified: SystemTime) -> Self {
+        Self {
+            original_file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            favorite: false,
+            path,
+            bytes,
+            modified,
+        }
+    }
 }
 
 impl ReplayClipStore {
@@ -517,9 +535,110 @@ impl ReplayClipStore {
                     // The store itself does not own attribution; the service
                     // joins persisted game evidence when listing clips.
                     game_name: None,
+                    original_file_name: clip.original_file_name,
+                    favorite: clip.favorite,
                 })
             })
             .collect()
+    }
+
+    /// Rename only an owned inventory clip, preserving its extension, identity,
+    /// game attribution and favorite. No existing destination is overwritten.
+    ///
+    /// # Errors
+    /// Invalid names, collisions, replaced files or failed durable metadata fail closed.
+    pub fn rename_clip(&self, file_name: &str, new_name: &str) -> Result<(), ReplayStoreError> {
+        if !labels::valid_name(new_name)
+            || (is_owned_clip_name(OsStr::new(new_name)) && new_name != file_name)
+            || Path::new(file_name).extension() != Path::new(new_name).extension()
+        {
+            return Err(ReplayStoreError::new(
+                "Use a valid filename and retain the original video type",
+            ));
+        }
+        let _operation = store_operation();
+        validate_store(&self.directory)?;
+        let (metadata, label) = owned_metadata(&self.directory, file_name)?;
+        if file_name == new_name {
+            return Ok(());
+        }
+        if fs::symlink_metadata(self.directory.join(new_name)).is_ok() {
+            return Err(ReplayStoreError::new(
+                "A clip with that filename already exists",
+            ));
+        }
+        let mut registry = labels::load(&self.directory)
+            .map_err(|e| io_error("could not read replay filename metadata", &e))?;
+        labels::prune(&self.directory, &mut registry);
+        registry.insert(new_name.to_owned(), label);
+        labels::save(&self.directory, &mut registry)
+            .map_err(|e| io_error("could not save replay filename metadata", &e))?;
+        let current = fs::symlink_metadata(self.directory.join(file_name))
+            .map_err(|e| io_error("clip changed before rename", &e))?;
+        if !current.is_file()
+            || current.nlink() != 1
+            || (current.dev(), current.ino()) != (metadata.dev(), metadata.ino())
+        {
+            return Err(ReplayStoreError::new(
+                "The clip changed. Reload before renaming it.",
+            ));
+        }
+        // Atomic no-replace rejects a collision arriving after the initial
+        // check. Use the existing safe nix wrapper, retaining the no-unsafe rule.
+        nix::fcntl::renameat2(
+            None,
+            &self.directory.join(file_name),
+            None,
+            &self.directory.join(new_name),
+            nix::fcntl::RenameFlags::RENAME_NOREPLACE,
+        )
+        .map_err(|e| {
+            io_error(
+                "could not rename replay clip",
+                &io::Error::from_raw_os_error(e as i32),
+            )
+        })?;
+        sync_directory(&self.directory)
+            .map_err(|e| io_error("could not flush renamed replay clip", &e))
+    }
+
+    /// Persist a favorite on an exact owned file, without changing media bytes.
+    ///
+    /// # Errors
+    /// Unsafe/replaced files or failed metadata persistence are rejected.
+    pub fn set_favorite(&self, file_name: &str, favorite: bool) -> Result<(), ReplayStoreError> {
+        let _operation = store_operation();
+        validate_store(&self.directory)?;
+        let (_, mut label) = owned_metadata(&self.directory, file_name)?;
+        let mut registry = labels::load(&self.directory)
+            .map_err(|e| io_error("could not read replay filename metadata", &e))?;
+        labels::prune(&self.directory, &mut registry);
+        label.favorite = favorite;
+        registry.insert(file_name.to_owned(), label);
+        labels::save(&self.directory, &mut registry)
+            .map_err(|e| io_error("could not save favorite", &e))
+    }
+
+    /// Read capacity on the destination filesystem without initializing storage.
+    /// Missing future child directories use the nearest existing parent.
+    #[must_use]
+    pub fn filesystem_capacity(directory: &Path) -> Option<(u64, u64)> {
+        let mut path = directory;
+        loop {
+            match fs::metadata(path) {
+                Ok(meta) if meta.is_dir() => {
+                    let stats = statvfs(path).ok()?;
+                    return Some((
+                        stats
+                            .blocks_available()
+                            .checked_mul(stats.fragment_size())?,
+                        stats.blocks().checked_mul(stats.fragment_size())?,
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => path = path.parent()?,
+                _ => return None,
+            }
+        }
     }
 
     /// Delete exactly one regular clip returned by [`Self::inventory`].
@@ -533,16 +652,10 @@ impl ReplayClipStore {
     /// store ownership, a non-regular target, or an I/O failure.
     pub fn delete_clip(&self, file_name: &str) -> Result<ReplayClipEntry, ReplayStoreError> {
         let name = OsStr::new(file_name);
-        if !is_owned_clip_name(name) {
-            return Err(ReplayStoreError::new(
-                "replay clip identifier is not a Redunar-generated name",
-            ));
-        }
         let _operation = store_operation();
         validate_store(&self.directory)?;
         let path = self.directory.join(name);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| io_error("could not inspect replay clip for deletion", &error))?;
+        let (metadata, label) = owned_metadata(&self.directory, file_name)?;
         if !metadata.file_type().is_file() {
             return Err(ReplayStoreError::new(
                 "replay clip deletion target is not a regular file",
@@ -559,6 +672,8 @@ impl ReplayClipStore {
                 .unwrap_or_default()
                 .as_nanos(),
             game_name: None,
+            original_file_name: label.original,
+            favorite: label.favorite,
         };
         fs::remove_file(path)
             .map_err(|error| io_error("could not delete Redunar replay clip", &error))?;
@@ -579,16 +694,10 @@ impl ReplayClipStore {
     /// or a filesystem failure.
     pub fn archive_clip(&self, file_name: &str) -> Result<PathBuf, ReplayStoreError> {
         let name = OsStr::new(file_name);
-        if !is_owned_clip_name(name) {
-            return Err(ReplayStoreError::new(
-                "replay clip identifier is not a Redunar-generated name",
-            ));
-        }
         let _operation = store_operation();
         validate_store(&self.directory)?;
         let source = self.directory.join(name);
-        let metadata = fs::symlink_metadata(&source)
-            .map_err(|error| io_error("could not inspect replay clip for archiving", &error))?;
+        let (metadata, _) = owned_metadata(&self.directory, file_name)?;
         if !metadata.file_type().is_file() {
             return Err(ReplayStoreError::new(
                 "replay archive source is not a regular file",
@@ -728,11 +837,11 @@ impl ReplayClipStore {
 
         let metadata = fs::symlink_metadata(&destination)
             .map_err(|error| io_error("could not inspect committed replay clip", &error))?;
-        owned.push(OwnedClip {
-            path: destination.clone(),
+        owned.push(OwnedClip::generated(
+            destination.clone(),
             bytes,
-            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
-        });
+            metadata.modified().unwrap_or(UNIX_EPOCH),
+        ));
         let (clips_removed_for_quota, bytes_removed_for_quota) = if preserve_existing {
             (0, 0)
         } else {
@@ -981,7 +1090,7 @@ fn write_marker(directory: &Path, destination: &Path) -> Result<(), ReplayStoreE
     Ok(())
 }
 
-fn create_temporary(directory: &Path) -> Result<(PathBuf, File), ReplayStoreError> {
+pub(super) fn create_temporary(directory: &Path) -> Result<(PathBuf, File), ReplayStoreError> {
     for _ in 0..32 {
         let id = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
         let path = directory.join(format!(".redunar-replay-{}-{id}.tmp", std::process::id()));
@@ -1118,8 +1227,35 @@ fn commit_temporary(
     ))
 }
 
+fn owned_metadata(directory: &Path, name: &str) -> Result<(fs::Metadata, Label), ReplayStoreError> {
+    if !labels::valid_name(name) {
+        return Err(ReplayStoreError::new("Invalid replay clip identifier"));
+    }
+    let metadata = fs::symlink_metadata(directory.join(name))
+        .map_err(|e| io_error("the clip is unavailable", &e))?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(ReplayStoreError::new(
+            "The clip is not an owned regular video file",
+        ));
+    }
+    let registry = labels::load(directory)
+        .map_err(|e| io_error("could not read replay filename metadata", &e))?;
+    let label = registry.get(name).filter(|l| l.matches(&metadata)).cloned();
+    match label {
+        Some(label) => Ok((metadata, label)),
+        None if is_owned_clip_name(OsStr::new(name)) => {
+            Ok((metadata.clone(), Label::new(name.to_owned(), &metadata)))
+        }
+        None => Err(ReplayStoreError::new(
+            "The file is not in Redunar's owned replay inventory",
+        )),
+    }
+}
+
 fn scan_owned_clips(directory: &Path) -> Result<Vec<OwnedClip>, ReplayStoreError> {
     let mut clips = Vec::new();
+    let labels = labels::load(directory)
+        .map_err(|e| io_error("could not read replay filename metadata", &e))?;
     for (index, entry) in fs::read_dir(directory)
         .map_err(|error| io_error("could not scan replay store", &error))?
         .enumerate()
@@ -1130,16 +1266,24 @@ fn scan_owned_clips(directory: &Path) -> Result<Vec<OwnedClip>, ReplayStoreError
             ));
         }
         let entry = entry.map_err(|error| io_error("could not scan replay store", &error))?;
-        if !is_owned_clip_name(&entry.file_name()) {
+        let file_name = entry.file_name();
+        let name = file_name.to_str().unwrap_or_default();
+        if !is_owned_clip_name(&file_name) && !labels.contains_key(name) {
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path())
             .map_err(|error| io_error("could not inspect replay clip", &error))?;
-        if metadata.file_type().is_file() {
+        if metadata.file_type().is_file() && metadata.nlink() == 1 {
+            let label = labels.get(name).filter(|l| l.matches(&metadata));
+            if !is_owned_clip_name(&file_name) && label.is_none() {
+                continue;
+            }
             clips.push(OwnedClip {
                 path: entry.path(),
                 bytes: metadata.len(),
                 modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+                original_file_name: label.map_or_else(|| name.to_owned(), |l| l.original.clone()),
+                favorite: label.is_some_and(|l| l.favorite),
             });
         }
     }
@@ -1206,7 +1350,7 @@ fn enforce_quota(
     Ok((removed, removed_bytes))
 }
 
-fn sync_directory(directory: &Path) -> io::Result<()> {
+pub(super) fn sync_directory(directory: &Path) -> io::Result<()> {
     File::open(directory)?.sync_all()
 }
 
@@ -1647,6 +1791,124 @@ mod tests {
     }
 
     #[test]
+    fn renamed_recording_keeps_identity_favorite_bytes_and_inventory() {
+        let fixture = Fixture::new();
+        let store = fixture.store(128, 512);
+        let original = "redunar-replay-1-000000001-1.mkv";
+        fs::write(fixture.root.join(original), b"private sample video").unwrap();
+        store.set_favorite(original, true).unwrap();
+        let opened = File::open(fixture.root.join(original)).unwrap();
+        store
+            .rename_clip(original, "A clean pass — final.mkv")
+            .unwrap();
+        assert!(!fixture.root.join(original).exists());
+        assert_eq!(opened.metadata().unwrap().len(), 20);
+        let inventory = store.inventory().unwrap();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].original_file_name, original);
+        assert!(inventory[0].favorite);
+        assert_eq!(
+            fs::read(&inventory[0].path).unwrap(),
+            b"private sample video"
+        );
+        store
+            .rename_clip(&inventory[0].file_name, "Second name.mkv")
+            .unwrap();
+        let inventory = store.inventory().unwrap();
+        assert!(inventory[0].favorite);
+        assert_eq!(inventory[0].original_file_name, original);
+        store.set_favorite("Second name.mkv", false).unwrap();
+        assert!(!store.inventory().unwrap()[0].favorite);
+        store.archive_clip("Second name.mkv").unwrap();
+        assert!(store.inventory().unwrap().is_empty());
+    }
+    #[test]
+    fn mutation_refuses_collisions_paths_changed_types_symlinks_and_unowned_files() {
+        let fixture = Fixture::new();
+        let store = fixture.store(128, 512);
+        let original = "redunar-replay-1-000000001-1.mp4";
+        fs::write(fixture.root.join(original), b"sample").unwrap();
+        fs::write(fixture.root.join("collision.mp4"), b"keep").unwrap();
+        store
+            .rename_clip(original, original)
+            .expect("unchanged name is a no-op");
+        for target in [
+            "collision.mp4",
+            "../escape.mp4",
+            ".hidden.mp4",
+            "bad\nname.mp4",
+            "type.mkv",
+            "/tmp/escape.mp4",
+            "bad\\name.mp4",
+        ] {
+            assert!(store.rename_clip(original, target).is_err(), "{target}");
+        }
+        assert!(store.set_favorite("collision.mp4", true).is_err());
+        symlink(fixture.root.join(original), fixture.root.join("link.mp4")).unwrap();
+        assert!(store.rename_clip(original, "link.mp4").is_err());
+        assert!(store.set_favorite("link.mp4", true).is_err());
+        assert_eq!(
+            fs::read(fixture.root.join("collision.mp4")).unwrap(),
+            b"keep"
+        );
+        store.rename_clip(original, "Renamed.mp4").unwrap();
+        fs::rename(
+            fixture.root.join("Renamed.mp4"),
+            fixture.root.join("moved-out"),
+        )
+        .unwrap();
+        fs::write(fixture.root.join("Renamed.mp4"), b"unowned replacement").unwrap();
+        assert!(store.set_favorite("Renamed.mp4", true).is_err());
+        assert!(store.delete_clip("Renamed.mp4").is_err());
+        assert!(store.inventory().unwrap().is_empty());
+    }
+    #[test]
+    fn interrupted_rename_is_discoverable_before_and_after_filesystem_commit() {
+        let fixture = Fixture::new();
+        let store = fixture.store(128, 512);
+        let name = "redunar-replay-1-000000001-1.mkv";
+        fs::write(fixture.root.join(name), b"sample").unwrap();
+        store.set_favorite(name, true).unwrap();
+        let (_, label) = owned_metadata(&fixture.root, name).unwrap();
+        let mut registry = labels::load(&fixture.root).unwrap();
+        registry.insert("Recovered.mkv".into(), label);
+        labels::save(&fixture.root, &mut registry).unwrap();
+        assert_eq!(store.inventory().unwrap()[0].file_name, name);
+        fs::rename(fixture.root.join(name), fixture.root.join("Recovered.mkv")).unwrap();
+        assert_eq!(store.inventory().unwrap()[0].file_name, "Recovered.mkv");
+        assert!(store.inventory().unwrap()[0].favorite);
+        store.delete_clip("Recovered.mkv").unwrap();
+        assert!(store.inventory().unwrap().is_empty());
+    }
+    #[test]
+    fn metadata_write_failure_does_not_rename_or_touch_recordings() {
+        let fixture = Fixture::new();
+        let store = fixture.store(128, 512);
+        let name = "redunar-replay-1-000000001-1.mkv";
+        fs::write(fixture.root.join(name), b"sample").unwrap();
+        let target = fixture.root.join("keep");
+        fs::write(&target, "keep").unwrap();
+        symlink(&target, fixture.root.join(labels::FILE)).unwrap();
+        assert!(store.rename_clip(name, "New.mkv").is_err());
+        assert!(store.set_favorite(name, true).is_err());
+        assert!(fixture.root.join(name).exists());
+        assert!(!fixture.root.join("New.mkv").exists());
+        assert_eq!(fs::read_to_string(target).unwrap(), "keep");
+    }
+    #[test]
+    fn capacity_is_read_only_on_a_not_yet_created_store() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.root).unwrap();
+        let planned = fixture.root.join("future").join("Redunar Replays");
+        let (free, total) = ReplayClipStore::filesystem_capacity(&planned).unwrap();
+        assert!(total >= free);
+        assert!(total > 0);
+        assert!(!planned.exists());
+        fs::write(fixture.root.join("file"), b"keep").unwrap();
+        assert!(ReplayClipStore::filesystem_capacity(&fixture.root.join("file")).is_none());
+    }
+
+    #[test]
     fn quota_never_removes_the_newly_committed_clip_before_older_clips() {
         let fixture = Fixture::new();
         let _store = fixture.store(64, 64);
@@ -1659,11 +1921,15 @@ mod tests {
                 path: protected.clone(),
                 bytes: 48,
                 modified: UNIX_EPOCH,
+                original_file_name: String::new(),
+                favorite: false,
             },
             OwnedClip {
                 path: older.clone(),
                 bytes: 48,
                 modified: SystemTime::now(),
+                original_file_name: String::new(),
+                favorite: false,
             },
         ];
         let removed =

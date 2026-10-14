@@ -1,8 +1,8 @@
-.steam-capture-guide{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 24px;padding:16px 20px;border:1px solid var(--border);border-radius:8px;background:#171717}
-.steam-capture-guide[hidden]{display:none}
-.steam-capture-guide strong{font-size:12px}
-.steam-capture-guide p{margin-top:6px;font-size:11px;line-height:1.5;color:var(--muted)}
-.steam-capture-guide .button{flex:none}
+.library-start-guide{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 24px;padding:16px 20px;border:1px solid var(--border);border-radius:8px;background:#171717}
+.library-start-guide[hidden]{display:none}
+.library-start-guide strong{font-size:12px}
+.library-start-guide p{margin-top:6px;font-size:11px;line-height:1.5;color:var(--muted)}
+.library-start-guide .button{flex:none}
 .game-detail>.steam-setup-card{display:block;margin:0;padding:20px 24px;border:0;border-bottom:1px solid var(--border);background:#171717}
 .steam-setup-card h3{margin-bottom:10px;font-size:14px}
 .steam-setup-card p{font-size:11px;line-height:1.6;color:var(--muted)}
@@ -14,4 +14,4 @@
 .steam-options-field textarea{box-sizing:border-box;width:100%;min-width:0;resize:vertical;padding:10px 12px;background:#111;border:1px solid #414141;border-radius:6px;color:var(--text);font:11px/1.6 "Noto Sans Mono",monospace;overflow-wrap:anywhere}
 .steam-options-field textarea:focus-visible{outline:2px solid #e7474f;outline-offset:2px}
 .steam-options-field .button{white-space:nowrap}
-@media(max-width:700px){.steam-capture-guide{align-items:start;flex-direction:column;padding:16px}.game-detail>.steam-setup-card{padding:18px}.steam-options-field{grid-template-columns:minmax(0,1fr)}.steam-options-field .button{justify-self:start}}
+@media(max-width:700px){.library-start-guide{align-items:start;flex-direction:column;padding:16px}.game-detail>.steam-setup-card{padding:18px}.steam-options-field{grid-template-columns:minmax(0,1fr)}.steam-options-field .button{justify-self:start}}

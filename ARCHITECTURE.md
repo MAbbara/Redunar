@@ -28,8 +28,15 @@ coordinator. Hidden webviews must not stop native supervision or shortcuts.
 Before cleanup or mutable startup, the Tauri service acquires an exclusive
 kernel lock on `backend-owner-v1.lock` in its state directory. All service clones
 retain the lease until their coordinator/listener resources are dropped. The lock
-file is never unlinked; process exit releases it. Contention creates a read-only
-secondary, and acquisition errors fail closed. A live legacy Replay socket also
+file is never unlinked; process exit releases it. Contention creates a read-only service for startup handoff, and acquisition errors
+fail closed. A manual secondary sends a bounded same-user Open request over
+`desktop-activation-v1.sock` and exits before GTK/window creation. Steam background
+secondaries exit quietly. The primary installs the activation handler after
+background-window setup, and dispatches the existing tray show/unminimize/focus
+action on its main thread. The endpoint cannot execute commands or accept paths;
+SO_PEERCRED and a private socket verify the local user. Listener shutdown precedes
+backend-lease release. If handoff fails because the owner crashed, startup retries
+lease acquisition once; a live legacy owner without this endpoint remains untouched. A live legacy Replay socket also
 withholds writes for compatibility with older builds that do not take the lock.
 
 | Component | Responsibility |
@@ -68,7 +75,7 @@ Paths below are relative to `output/tauri-redunar/`:
 
 | Flow | Main files |
 | --- | --- |
-| Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `window_lifecycle.rs` |
+| Commands and app lifetime | `src-tauri/src/main.rs`, `backend.rs`, `runtime.rs`, `activation.rs`, `window_lifecycle.rs` |
 | Launch and supervision | `src-tauri/src/launch_plan.rs`, `sessions.rs`, `session_lifecycle.rs`, `background_start.rs`; `crates/redunar-platform/src/steam_session_bridge.rs` |
 | Catalog/profile saves | `src-tauri/src/catalog.rs`, `profiles.rs`; `ui/game-drafts.mjs` |
 | Installation and artwork | `src-tauri/src/installation.rs`, `artwork.rs`; matching `ui/game-*.js` |
@@ -104,14 +111,11 @@ before calling the distro's package manager with fixed arguments. The webview
 cannot choose a package path or command. The host queries the package database
 read-only to distinguish an interrupted update from a completed install that
 still needs an app restart.
-The Tauri backend creates a read-only service for a secondary process when
-another Redunar owns the login-session Replay socket. That secondary service
-does not start a competing Replay control listener. Update checking and
-installation also require primary write access because they mutate the shared
-update cache. The secondary GTK application is non-unique, so launching
-it cannot reactivate the primary Tauri event loop and
-repeat the primary webview setup. The primary retains the installed desktop
-application ID.
+The Tauri backend preserves the lease and legacy Replay socket guard. Secondary
+manual launches restore the primary main window instead of creating a read-only
+GTK application. Failed handoff to a live old build exits with a restart explanation;
+it never repeats primary webview setup or takes over an active session. Update
+checking/installation still require primary write access.
 Window geometry is persisted as logical desktop dimensions. The native host
 converts Tauri's physical inner size on save and restores a logical size, so a
 HiDPI scale does not shrink the next window. The app-preferences V6 reader also
@@ -427,3 +431,11 @@ detect external conflicts, and restore only values Redunar owns.
 fixtures, native bridge checks, installed-runtime checks, and game acceptance.
 The source map above is the current product contract and the only desktop
 frontend ownership model for new product work.
+
+Store-local filename/favorite ownership is in `crates/redunar-daemon/src/replay_clip_labels.rs`
+and `replay_store.rs`; service joins game attribution using the original generated
+identity. Native mutations in `src-tauri/src/clip_details.rs` serialize rename with export
+admission in `clip_export.rs`. The webview cannot rename arbitrary paths. See
+[REPLAY.md](REPLAY.md#recording-filenames-favorites-and-capacity) for persistence
+and compatibility obligations. Microphone input enumeration is owned by the audio
+library, exposed read-only through the service/runtime command.

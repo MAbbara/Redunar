@@ -35,6 +35,9 @@ def main():
         cases = [(case, [f"--{case}"]) for case in (
             "tray-off", "tray-fallback", "tray-off-auto-focus", "tray-off-key", "tray-off-click", "tray-off-host", "tray-on-host")]
         cases.extend([
+            ("tray-off-reopen", ["--tray-off-host", "--reopen"]),
+            ("tray-on-reopen", ["--tray-on-host", "--reopen"]),
+            ("manual-owner-reopen", ["--tray-off-host", "--reopen", "--manual-owner"]),
             ("tray-off-park", ["--tray-off-host", "--park"]),
             ("tray-on-park", ["--tray-on-host", "--park"]),
             ("manual-owner-park", ["--tray-off-host", "--park", "--manual-owner"]),

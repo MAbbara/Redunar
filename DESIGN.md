@@ -1,13 +1,15 @@
 # Redunar interface contract
 
-Current Tauri design, reconciled September 20, 2026. This file owns approved
+Current Tauri design, reconciled October 14, 2026. This file owns approved
 visual and interaction rules. Source is in `output/tauri-redunar/ui/`.
 
 ## Shell and visual language
 
 Navigation is Overview, Library, Global settings, Instant Replay, History, and
-Settings. Use Redunar's Comet R and wordmark, a compact sidebar, a quiet
-breadcrumb header, and page titles in the workspace. Keep graphics subordinate
+Settings. Center the Redunar wordmark in the expanded sidebar and Comet R in its
+collapsed form, with clear page titles in the workspace. Flat section navigation does not need a repeated
+Workspace breadcrumb bar. The sidebar can collapse to icons with accessible
+labels, hover titles, and an explicit expansion control. Keep graphics subordinate
 to measurements and controls. Keep marketing language, decorative motion, and
 session-identity concepts out of the app workspace.
 
@@ -69,7 +71,11 @@ Game settings and Launch matching are separate tabs. Clearly show inherited
 versus custom values and Reset to global settings. Changes retain their own
 drafts through navigation and unrelated saves. Installed-game import reviews
 local Steam/XDG entries; running helper processes are not import candidates.
-Overview offers a Steam capture setup link while no game is active. Every
+Overview offers **Add your first game**, with a short add/scan instruction and
+**Open Library**, only after the catalog successfully loads with no saved games.
+Loading and failed catalog reads never appear as a first-use empty state. Once
+any game is saved, the guide disappears. Steam-specific setup stays beside the
+selected Steam game in Library. Every
 selected Steam game shows a **Play from Steam** panel above both Library tabs,
 with one paste instruction, the exact Launch Options value, **Copy**, and a short
 automatic startup note. Routine unconfigured and running-Steam states use this
@@ -193,12 +199,21 @@ loading, retry, deletion, and inventory refresh must preserve appropriate scroll
 search, focus, and save-duration state. Long filenames wrap or truncate without
 forcing horizontal scrolling; show available game, duration, date, and size.
 
+Filename editing exposes the name without its extension and preserves the original
+file type automatically. Overview and Replay use a shared capture status treatment;
+readiness, waiting and failures remain distinct, with complete failure explanations.
+Both pages offer the same duration and Save replay controls, retaining the selected
+duration when switching pages and displaying its saved shortcut. Keep the
+Overview capture bar focused on saving; the sidebar opens the Replay editor.
+
 The video area's aspect ratio follows the decoded clip. Keep the entire image
 visible without cropping, rounded boundaries, and playback controls directly
 underneath. Do not crop video just to remove letterboxing; black pixels recorded
 inside the file are part of the footage. Keep technical video details at top
-right and a smaller filename above the game name at bottom left. No Storyboard
-preview caption, fictional scene title, or expand control belongs in production.
+right, the actual filename in the bar above the player, and the game name
+once at bottom left. Playback volume and mute controls are omitted so they
+cannot be mistaken for changes to exported audio. No Storyboard preview caption
+or expand control belongs in production.
 
 The filmstrip has a time ruler, In/Out handles, playhead, selected duration, and
 Export selection. The export dialog shows In, Out, and Duration in separated

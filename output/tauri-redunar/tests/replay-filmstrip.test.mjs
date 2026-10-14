@@ -6,7 +6,9 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,40));
 function fixture({playing=false,hidden=false,fail=false}={}){
  const draws=[];
  class Preview extends EventTarget {
-  videoWidth=640;videoHeight=360;position=0;sources=[];released=false;
+  videoWidth=640;videoHeight=360;position=0;sources=[];released=false;style={};attached=false;
+  setAttribute(){}
+  remove(){this.attached=false;}
   set src(value){this.sources.push(value);queueMicrotask(()=>this.dispatchEvent(new Event(fail?'error':'loadeddata')));}
   get currentTime(){return this.position;}
   set currentTime(value){this.position=value;queueMicrotask(()=>this.dispatchEvent(new Event('seeked')));}
@@ -14,7 +16,7 @@ function fixture({playing=false,hidden=false,fail=false}={}){
   load(){}
  }
  const preview=new Preview();
- const document=Object.assign(new EventTarget(),{hidden,createElement:()=>preview});
+ const document=Object.assign(new EventTarget(),{hidden,createElement:()=>preview,body:{append:video=>{video.attached=true;}}});
  globalThis.document=document;
  const player=Object.assign(new EventTarget(),{paused:!playing,currentSrc:'http://local/selected-token',duration:30,currentTime:9});
  const canvas={dataset:{},getContext:()=>({drawImage:(video,...args)=>draws.push({time:video.currentTime,args})})};
@@ -32,7 +34,7 @@ test('filmstrip samples eight moments within a fixed canvas without seeking the 
  assert.equal(f.player.currentTime,9);
  assert.deepEqual(f.preview.sources,['http://local/selected-token']);
  assert.equal(f.canvas.width,1280);assert.equal(f.canvas.height,90);
- assert.equal(f.status.hidden,true);assert.equal(f.preview.released,true);
+ assert.equal(f.status.hidden,true);assert.equal(f.preview.released,true);assert.equal(f.preview.attached,false);
  f.stop();
 });
 

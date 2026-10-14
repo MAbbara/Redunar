@@ -10,8 +10,8 @@ mod opus;
 mod source;
 
 pub use node::{
-    GameAudioNode, GameAudioNodeError, discover_game_audio_node, discover_microphone_node,
-    discover_output_monitor_node,
+    GameAudioNode, GameAudioNodeError, MicrophoneInput, discover_game_audio_node,
+    discover_microphone_node, discover_output_monitor_node, microphone_inputs_from_registry,
 };
 pub use opus::{
     EncodedOpusPacket, OpusDecoder, OpusEncoder, OpusEncoderError, OpusStreamDescription,
@@ -19,7 +19,8 @@ pub use opus::{
 pub use source::{
     AudioCaptureError, AudioCaptureSource, MicrophoneAudioCapture, MicrophoneAudioSource,
     SystemAudioCapture, discover_microphone_audio_sources, discover_microphone_audio_sources_for,
-    discover_system_audio_source, discover_system_audio_sources, monotonic_now_ns,
+    discover_system_audio_source, discover_system_audio_sources, microphone_inputs,
+    monotonic_now_ns,
 };
 
 pub const AUDIO_SAMPLE_RATE: u32 = 48_000;

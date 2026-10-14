@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "redunar-tauri"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "gtk",
  "libc",

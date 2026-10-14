@@ -36,12 +36,20 @@ export function renderReplayFilmstrip(player, canvas, status) {
   // Sampling needs decoded frames, so use the same normal load as the player.
   preview.preload = 'auto';
   preview.crossOrigin = 'anonymous';
+  // WebKitGTK can expose loadeddata/seeked on a detached video while canvas
+  // copies remain transparent. Keep the bounded sampler attached, visually
+  // hidden and outside input navigation, until its decoder is released.
+  preview.setAttribute('aria-hidden', 'true');
+  preview.tabIndex = -1;
+  Object.assign(preview.style, {position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none'});
+  document.body.append(preview);
   canvas.width = FRAME_COUNT * FRAME_WIDTH;
   canvas.height = FRAME_HEIGHT;
   const context = canvas.getContext('2d');
   const release = () => {
     preview.removeAttribute('src');
     preview.load();
+    preview.remove();
   };
   const waitUntilIdle = async () => {
     while (!signal.aborted && (!player.paused || document.hidden)) {
@@ -61,6 +69,9 @@ export function renderReplayFilmstrip(player, canvas, status) {
         if (Math.abs(preview.currentTime - seconds) > .01) {
           await waitForMedia(preview, 'seeked', signal, () => { preview.currentTime = seconds; });
         }
+        // WebKit can fire seeked before its decoded frame is painted. Give
+        // that frame a rendering turn before copying it into the filmstrip.
+        await new Promise(resolve => setTimeout(resolve, 32));
         if (signal.aborted) return;
         const scale = Math.max(FRAME_WIDTH / preview.videoWidth, FRAME_HEIGHT / preview.videoHeight);
         const width = FRAME_WIDTH / scale, height = FRAME_HEIGHT / scale;
@@ -68,8 +79,6 @@ export function renderReplayFilmstrip(player, canvas, status) {
           width, height, index * FRAME_WIDTH, 0, FRAME_WIDTH, FRAME_HEIGHT);
         completed++;
         canvas.dataset.frames = String(completed);
-        // Yield between bounded canvas copies so controls remain interactive.
-        await new Promise(resolve => setTimeout(resolve, 32));
       }
       status.hidden = true;
     } catch {

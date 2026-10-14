@@ -19,8 +19,9 @@ const PREFERENCES_HEADER_V4: &str = "redunar-replay-preferences-v4";
 const PREFERENCES_HEADER_V5: &str = "redunar-replay-preferences-v5";
 const PREFERENCES_HEADER_V6: &str = "redunar-replay-preferences-v6";
 const PREFERENCES_HEADER_V7: &str = "redunar-replay-preferences-v7";
-const DEFAULT_SHORTCUT: &str = "F8";
-const DEFAULT_OVERLAY_SHORTCUT: &str = "Shift+Tab";
+
+const DEFAULT_OVERLAY_SHORTCUT: &str = "Alt+Shift+Z";
+const LEGACY_OVERLAY_SHORTCUT: &str = "Shift+Tab";
 const REPLAY_DIRECTORY_NAME: &str = "Redunar Replays";
 const MAX_PREFERENCES_BYTES: u64 = 8 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
@@ -89,10 +90,7 @@ impl Default for ReplayPreferences {
             overlay_shortcut: DEFAULT_OVERLAY_SHORTCUT.to_owned(),
             close_overlay_on_outside_click: true,
             initial_save_duration: ReplayDuration::Seconds30,
-            save_shortcuts: vec![ReplayShortcutBinding {
-                shortcut: DEFAULT_SHORTCUT.to_owned(),
-                duration: ReplayDuration::Seconds30,
-            }],
+            save_shortcuts: Vec::new(),
             microphone: MicrophoneMode::DefaultInput,
         }
     }
@@ -420,7 +418,9 @@ fn parse(contents: &str) -> Result<ReplayPreferences, &'static str> {
     ) {
         field(lines.next(), "overlay-shortcut")?.to_owned()
     } else {
-        DEFAULT_OVERLAY_SHORTCUT.to_owned()
+        // Older formats did not store the menu binding. Keep their historical
+        // behavior rather than treating an existing install as a new one.
+        LEGACY_OVERLAY_SHORTCUT.to_owned()
     };
     let close_overlay_on_outside_click = if matches!(
         version,
@@ -728,7 +728,8 @@ mod tests {
     #[test]
     fn default_resolves_to_videos_with_state_fallback() {
         let preferences = ReplayPreferences::default();
-        assert_eq!(preferences.overlay_shortcut, "Shift+Tab");
+        assert_eq!(preferences.overlay_shortcut, "Alt+Shift+Z");
+        assert!(preferences.save_shortcuts.is_empty());
         assert!(preferences.close_overlay_on_outside_click);
         assert_eq!(preferences.microphone, MicrophoneMode::DefaultInput);
         assert_eq!(
@@ -770,7 +771,7 @@ mod tests {
         let loaded = load(&state).expect("reload preferences");
         assert_eq!(loaded.custom_save_parent, Some(parent));
         assert_eq!(loaded.output_format, ReplayOutputFormat::Mp4);
-        assert_eq!(loaded.overlay_shortcut, "Shift+Tab");
+        assert_eq!(loaded.overlay_shortcut, "Alt+Shift+Z");
         assert_eq!(loaded.initial_save_duration, ReplayDuration::Seconds120);
         assert_eq!(loaded.save_shortcuts.len(), 2);
         assert_eq!(
@@ -865,6 +866,14 @@ mod tests {
             ReplayPreferences::default().save_shortcuts
         );
 
+        set_save_shortcuts(
+            &state,
+            vec![ReplayShortcutBinding {
+                shortcut: "F8".into(),
+                duration: ReplayDuration::Seconds30,
+            }],
+        )
+        .unwrap();
         assert!(set_overlay_behavior(&state, "F8".to_owned(), true).is_err());
         let _ = fs::remove_dir_all(state);
     }

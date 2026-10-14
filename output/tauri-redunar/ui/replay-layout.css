@@ -1,0 +1,93 @@
+/* Workspace arrangement: capture first, then playback, then the selected range. */
+.replay-page-heading { margin-bottom: 18px; }
+.replay-page-heading h1 { font-size: 27px; }
+.replay-capture-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.replay-capture-bar #session-capture-summary { min-width: 0; flex: 1; }
+.replay-capture-bar .capture-summary { padding: 0; margin: 0; border: 0; background: none; align-items: center; }
+.replay-capture-bar .capture-summary-secondary { margin-top: 0; gap: 18px !important; }
+.replay-capture-bar .capture-summary-secondary a:last-child { margin-left: 0; }
+.replay-capture-bar .replay-save-actions { display: flex; align-items: center; flex-wrap: wrap; flex: none; }
+.replay-capture-bar .replay-duration-label { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.replay-capture-bar .replay-duration-label select { min-width: 126px; }
+.clip-title-tools { padding: 12px 16px; gap: 14px; }
+.clip-name { flex: 1; min-width: 0; }
+.clip-name strong { display: block; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.clip-name small { display: block; margin-top: 5px; font-size: 10px; color: var(--muted); }
+.clip-edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.clip-edit-actions .button { min-height: 34px; padding: 7px 11px; }
+.clip-action-menu { position: relative; }
+.clip-action-menu summary { list-style: none; cursor: pointer; min-width: 36px; font-size: 20px; line-height: 18px; }
+.clip-action-menu summary::-webkit-details-marker { display: none; }
+/* The production video rule retains the decoded display ratio at every width. */
+.replay-workspace .replay-clip-editor { padding: 20px 22px 10px; }
+.replay-workspace .clip-time-ruler { margin-bottom: 10px; }
+.replay-workspace .clip-editor-footer { flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+.replay-workspace .clip-editor-footer .trim-time { gap: 7px; }
+.replay-workspace .clip-editor-footer .selection-time { text-transform: none; }
+.replay-workspace .clip-editor-footer .selection-time output { font-size: 12px; }
+.replay-workspace .clip-preview-status { margin-top: 7px; min-height: 10px; }
+.clip-library-actions { display: flex; gap: 6px; }
+.clip-library-actions .button { width: 32px; min-height: 32px; padding: 6px; }
+.replay-workspace .clip-browser .section-heading { margin-bottom: 12px; }
+.replay-workspace .clip-browser .search { margin-bottom: 12px; }
+.replay-workspace .clip-filters { gap: 9px; margin-bottom: 5px; }
+.replay-workspace .clip-list { margin-top: 12px; }
+@media (min-width: 981px) {
+  .replay-workspace { grid-template-columns: minmax(0, 1fr) 290px; gap: 20px; }
+  .replay-workspace .clip-browser .clip-list { max-height: min(42vh, 440px); }
+  .replay-workspace .clip-browser .thumbnail { height: 90px; }
+}
+@media (max-width: 1180px) {
+  .replay-capture-bar { flex-wrap: wrap; gap: 14px; }
+  .replay-capture-bar .replay-save-actions { margin-left: auto; }
+  .clip-title-tools { flex-wrap: wrap; }
+  .clip-name { flex-basis: 100%; }
+}
+@media (max-width: 900px) {
+  .replay-capture-bar { align-items: start; padding: 14px; }
+  .replay-capture-bar #session-capture-summary { flex-basis: 100%; }
+  .replay-capture-bar .replay-save-actions { margin-left: 0; width: 100%; }
+  .replay-capture-bar .capture-summary-secondary { margin-left: 0; }
+  .replay-capture-bar .replay-duration-label { flex-wrap: wrap; }
+  .replay-capture-bar .replay-duration-label select { min-width: 115px; }
+  .replay-workspace .replay-clip-editor { padding: 18px 16px 10px; }
+  .replay-workspace .clip-editor-footer { gap: 12px; }
+  .replay-workspace .clip-editor-footer #export-clip-button { margin-left: auto; }
+}
+
+.replay-save-actions .replay-shortcut-slot { margin-left: 2px; }
+.replay-save-actions .replay-shortcut-slot[hidden] { display: none; }
+.replay-save-actions #save-replay-shortcut { padding: 3px 6px; border-color: #ffffff38; border-radius: 4px; color: #f1dfe2; background: #0002; font-size: 11px; }
+
+.replay-settings-link { min-height: 34px; padding: 7px 12px; font-size: 11px; color: #bbb; }
+@media (max-width: 600px) {
+  .replay-page-heading { flex-wrap: wrap; gap: 12px; }
+  .replay-page-heading h1 { font-size: 24px; }
+}
+
+.overview-capture-bar { margin-top: 8px; margin-bottom: 24px; }
+
+/* Match the badge's font and padding when reserving saved shortcut width;
+   choosing an unassigned duration must not move the Save action. */
+.replay-save-actions .replay-shortcut-slot {
+  font: 11px 'Noto Sans Mono', monospace;
+  width: calc(var(--shortcut-characters, 0) * 1ch + 14px);
+  min-width: calc(var(--shortcut-characters, 0) * 1ch + 14px);
+}
+.replay-save-actions #save-replay-shortcut { font-family: 'Noto Sans Mono', monospace; }
+.microphone-device { gap: 12px; }
+.microphone-device .small-note { grid-column: 1 / -1; }
+
+.replay-capture-bar .replay-duration-label .precision-select { width: 126px; flex: none; }
+.replay-capture-bar [data-action="save-replay"] { height: 44px; min-height: 44px; }
+.replay-save-actions #save-replay-shortcut { line-height: 16px; }

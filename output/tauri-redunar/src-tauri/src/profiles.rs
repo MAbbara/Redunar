@@ -452,10 +452,10 @@ mod persistence_tests {
             std::env::temp_dir().join(format!("redunar-tauri-profile-{}", std::process::id()));
         let service = RedunarService::with_state_directory(&directory);
         let initial = workspace(&service).unwrap();
-        assert_eq!(initial.values.shortcuts.len(), 2);
+        assert_eq!(initial.values.shortcuts.len(), 1);
         assert_eq!(
-            initial.values.shortcuts.get("30").map(String::as_str),
-            Some("F8")
+            initial.values.shortcuts.get("overlay").map(String::as_str),
+            Some("Alt+Shift+Z")
         );
         assert!(!initial.values.shortcuts.contains_key("15"));
         let mut profile = service.load_game_catalog().unwrap().global_profile;

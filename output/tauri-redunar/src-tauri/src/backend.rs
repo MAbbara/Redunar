@@ -34,6 +34,20 @@ pub fn shutdown() {
     }
 }
 
+pub fn retry_ownership() -> Result<bool, String> {
+    let next = RedunarService::for_tauri()
+        .map_err(|_| "Redunar could not safely reacquire backend ownership".to_owned())?;
+    if next.is_read_only() {
+        return Ok(false);
+    }
+    *SERVICE
+        .get()
+        .expect("initialized")
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(next);
+    Ok(true)
+}
+
 pub struct Monitor(pub Mutex<MonitorHandle>);
 #[derive(Serialize)]
 pub struct HardwareStatus {

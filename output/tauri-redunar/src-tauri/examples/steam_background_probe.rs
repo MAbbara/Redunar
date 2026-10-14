@@ -1,12 +1,16 @@
 //! Production startup/window calls on a private D-Bus/Xvfb session. No game,
 //! monitor, input device, user state, update source or installed app is touched.
 #![allow(dead_code)]
+#[path = "../src/activation.rs"]
+mod activation;
 #[path = "../src/background_start.rs"]
 mod background_start;
 #[path = "steam_background/host.rs"]
 mod host;
 #[path = "steam_background/parking.rs"]
 mod parking;
+#[path = "steam_background/reopening.rs"]
+mod reopening;
 #[path = "../src/tray.rs"]
 mod tray;
 #[path = "../src/tray_native/mod.rs"]
@@ -33,6 +37,12 @@ mod backend {
 static PASSED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--activation-client") {
+        let path = std::env::args_os().nth(2).unwrap();
+        activation::request(std::path::Path::new(&path)).unwrap();
+        return;
+    }
+    let reopen = std::env::args().any(|a| a == "--reopen");
     let park = std::env::args().any(|argument| argument == "--park");
     let cancel = std::env::args().any(|argument| argument == "--cancel-close");
     let automatic = !std::env::args().any(|argument| argument == "--manual-owner");
@@ -117,7 +127,9 @@ fn main() {
                         }
                     });
                 } else {
-                    if park || cancel {
+                    if reopen {
+                        reopening::run(handle,host);
+                    } else if park || cancel {
                         tray::show_window(&handle);
                         gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
                             assert!(!handle.state::<background_start::State>().may_auto_exit());

@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.22" date="2026-10-14">
+      <description>
+        <p>Updates the workspace, clip management, and capture controls; reopens the existing Redunar window on repeated launches; and fixes clip previews and Steam library import feedback.</p>
+      </description>
+    </release>
     <release version="0.1.21" date="2026-10-11">
       <description>
         <p>Fixes Steam Play launches on X11, adds optional microphone recording mixed with game sound in Replay clips, and reduces replay gaps caused by short encoder bursts overflowing the recording queue.</p>

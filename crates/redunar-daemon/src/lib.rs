@@ -22,6 +22,7 @@ mod replay;
 mod replay_audio;
 mod replay_audio_mix;
 mod replay_clip_games;
+mod replay_clip_labels;
 mod replay_control;
 mod replay_diagnostics;
 mod replay_encoder;
@@ -265,6 +266,12 @@ impl RedunarService {
     #[must_use]
     pub const fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Same-user desktop activation endpoint, separate from game/capture IPC.
+    #[must_use]
+    pub fn desktop_activation_socket(&self) -> PathBuf {
+        self.state_directory.join("desktop-activation-v1.sock")
     }
 
     /// A second Tauri process may show a read-only window while another app
@@ -793,7 +800,8 @@ impl RedunarService {
         let ledger = replay_clip_games::games(&self.state_directory);
         let sessions = session_history::load(&self.state_directory).unwrap_or_default();
         for clip in &mut clips {
-            clip.game_name = replay_clip_games::resolve(&clip.file_name, &ledger, &sessions);
+            clip.game_name =
+                replay_clip_games::resolve(&clip.original_file_name, &ledger, &sessions);
         }
         clips
     }
@@ -845,6 +853,50 @@ impl RedunarService {
         .map_err(|error| ReplayStorageAccessError::delete(&error))
     }
 
+    /// Rename an exact owned recording, preserving persisted labeling.
+    ///
+    /// # Errors
+    /// Read-only ownership, unsafe names, collisions and persistence failures are rejected.
+    pub fn rename_replay_clip(
+        &self,
+        file_name: &str,
+        new_name: &str,
+    ) -> Result<(), ReplayStorageAccessError> {
+        self.clip_mutation_store()?
+            .rename_clip(file_name, new_name)
+            .map_err(|e| ReplayStorageAccessError::inventory(&e))
+    }
+    /// Set a recording's favorite independently of media and game attribution.
+    ///
+    /// # Errors
+    /// Read-only ownership, replaced files and persistence failures are rejected.
+    pub fn set_replay_clip_favorite(
+        &self,
+        file_name: &str,
+        favorite: bool,
+    ) -> Result<(), ReplayStorageAccessError> {
+        self.clip_mutation_store()?
+            .set_favorite(file_name, favorite)
+            .map_err(|e| ReplayStorageAccessError::inventory(&e))
+    }
+    fn clip_mutation_store(&self) -> Result<ReplayClipStore, ReplayStorageAccessError> {
+        if self.read_only {
+            return Err(ReplayStorageAccessError::inventory(
+                &"Another Redunar owns this replay store",
+            ));
+        }
+        let settings = self
+            .load_game_catalog()
+            .map_err(|e| ReplayStorageAccessError::catalog(&e))?
+            .global_profile
+            .replay;
+        ReplayClipStore::open_existing(
+            self.replay_save_directory()?,
+            ReplayBudget::from_settings(settings),
+        )
+        .map_err(|e| ReplayStorageAccessError::inventory(&e))
+    }
+
     /// Archive one exact listed Replay clip below the configured store.
     ///
     /// # Errors
@@ -869,7 +921,7 @@ impl RedunarService {
     }
 
     /// Load daemon-owned Replay preferences. Missing state uses the Videos
-    /// folder and the default planned save shortcut without writing anything.
+    /// folder and menu-only default shortcut without writing anything.
     ///
     /// # Errors
     ///
@@ -897,6 +949,17 @@ impl RedunarService {
             .map_err(|error| ReplayStorageAccessError::preferences(&error))?;
         Ok(preferences
             .resolved_directory(self.replay_home_directory.as_deref(), &self.state_directory))
+    }
+
+    /// List audio inputs without opening a recording stream.
+    ///
+    /// # Errors
+    /// Missing sound-server discovery is reported explicitly.
+    pub fn microphone_inputs(
+        &self,
+    ) -> Result<Vec<redunar_capture_audio::MicrophoneInput>, redunar_capture_audio::AudioCaptureError>
+    {
+        redunar_capture_audio::microphone_inputs()
     }
 
     /// Select an optional parent for Redunar's fixed `Redunar Replays` child.
@@ -1767,6 +1830,39 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.root).expect("remove fixture");
         }
+    }
+
+    #[test]
+    fn renamed_service_inventory_retains_game_label_and_favorite() {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("state");
+        let service = RedunarService::with_state_directory(&state);
+        service
+            .set_replay_save_parent(Some(fixture.root.clone()))
+            .unwrap();
+        let settings = service.load_game_catalog().unwrap().global_profile.replay;
+        let store = ReplayClipStore::open(
+            service.replay_save_directory().unwrap(),
+            ReplayBudget::from_settings(settings),
+        )
+        .unwrap();
+        let name = "redunar-replay-1-000000001-1.mkv";
+        fs::write(store.directory().join(name), b"sample").unwrap();
+        service.record_clip_game(name, "Local game").unwrap();
+        service.set_replay_clip_favorite(name, true).unwrap();
+        service.rename_replay_clip(name, "Great lap.mkv").unwrap();
+        let entries = service.replay_clip_inventory().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].game_name.as_deref(), Some("Local game"));
+        assert!(entries[0].favorite);
+        let restarted = RedunarService::with_state_directory(&state);
+        assert!(restarted.replay_clip_inventory().unwrap()[0].favorite);
+        service.delete_replay_clip("Great lap.mkv").unwrap();
+        assert!(service.replay_clip_inventory().unwrap().is_empty());
+        let mut secondary = RedunarService::with_state_directory(&state);
+        secondary.read_only = true;
+        assert!(secondary.rename_replay_clip(name, "No.mkv").is_err());
+        assert!(secondary.set_replay_clip_favorite(name, true).is_err());
     }
 
     #[test]

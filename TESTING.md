@@ -34,6 +34,46 @@ shortcuts; saves remain disabled for pending or failed recording.
 See the [October 9 follow-up](docs/verification/2026-10-09-replay-save-nvidia.md)
 for dated checks and remaining NVIDIA hardware acceptance.
 
+## Workspace UI and existing-window activation
+
+The October 14 integration is based on `5f7b048` on `feat/workspace-ui`.
+Its [task and acceptance scope](docs/verification/2026-10-14-workspace-ui-task.md)
+cover the reviewed workspace design and native operations. Run the documented
+full gate before merge, followed by the production WebKit fixtures:
+
+```sh
+xvfb-run -a python3 output/tauri-redunar/tests/workspace-webview.py
+xvfb-run -a python3 output/tauri-redunar/tests/replay-webview.py
+```
+
+These serve the built production frontend with private native-command fixtures.
+They cover shared readiness/save controls and saved shortcuts, stable positions
+at wide/compact widths, filename editing/collision recovery, duplicate favorites,
+filters without replacing playback, actual-capacity DTOs/low-space guidance,
+missing microphone selection and retry, folder cancellation/default reset,
+explicit same-game comparison and collapsible navigation. First-game guidance
+is checked against pending, failed, empty, recovered, and populated catalog reads,
+including its Library action and narrow layout. Screenshots and
+assertion reports belong to `.redunar-build/reports/workspace-ui` and `replay-ui`.
+
+Store/service fixtures cover filename ownership, media/game/favorite preservation
+across restart, crash-interrupted rename, collision/replacement/symlink rejection,
+metadata persistence failure and read-only ownership. Native export tests cover
+mutation rejection while an export owns its source and admission recovery after
+failure. Audio fixtures bound input enumeration and exclude monitor/output nodes.
+Fresh preferences assign only Alt+Shift+Z; legacy and cleared bindings retain
+compatibility coverage.
+
+The private desktop runner below also starts four concurrent secondary activation
+clients against the actual Tauri window with tray on/off and manual ownership.
+It asserts a single visible webview, unchanged preferences and retained ownership.
+Activation unit fixtures cover pending startup, repeated requests, timeout,
+malformed/slow clients, stale sockets, unsafe targets and cleanup/restart.
+Xvfb does not qualify compositor focus, an installed upgrade, hardware audio or
+live-game capture. Those remain separately authorized acceptance. Current run
+results and exact source manifests are kept under `.redunar-build/reports`;
+production build source/binary manifests belong to `.redunar-build/linux`.
+
 ## Replay menu pointer fixtures
 
 The shortcut helper's fake mouse fixtures cover queued gameplay clicks/motion

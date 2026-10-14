@@ -100,6 +100,77 @@ pub fn discover_game_audio_node(
     }
 }
 
+/// One available physical/input node, with a bounded local display label.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MicrophoneInput {
+    pub id: String,
+    pub label: String,
+}
+
+/// Enumerate input nodes only; playback streams and output monitors are excluded.
+///
+/// # Errors
+/// Oversized or malformed registries are rejected before exposing device choices.
+pub fn microphone_inputs_from_registry(
+    registry: &[u8],
+) -> Result<Vec<MicrophoneInput>, GameAudioNodeError> {
+    if registry.len() > MAX_REGISTRY_BYTES {
+        return Err(GameAudioNodeError::RegistryTooLarge);
+    }
+    let text = std::str::from_utf8(registry).map_err(|_| GameAudioNodeError::MalformedRegistry)?;
+    // pw-dump supplies an array of objects. The shared object scanner alone
+    // also accepts unrelated text; validate this envelope so discovery cannot
+    // turn command diagnostics into a successful empty device list.
+    let body = text
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or(GameAudioNodeError::MalformedRegistry)?;
+    let objects = json_objects(body)?;
+    let mut remaining = body.trim();
+    for (index, object) in objects.iter().enumerate() {
+        if index > 0 {
+            remaining = remaining
+                .strip_prefix(',')
+                .ok_or(GameAudioNodeError::MalformedRegistry)?
+                .trim_start();
+        }
+        remaining = remaining
+            .strip_prefix(object)
+            .ok_or(GameAudioNodeError::MalformedRegistry)?
+            .trim_start();
+    }
+    if !remaining.is_empty() {
+        return Err(GameAudioNodeError::MalformedRegistry);
+    }
+    let mut inputs = BTreeMap::new();
+    for object in objects {
+        if !object.contains("\"PipeWire:Interface:Node\"")
+            || !property_equals(object, "media.class", "Audio/Source")
+        {
+            continue;
+        }
+        let Some(id) = property_string(object, "node.name") else {
+            continue;
+        };
+        if id.is_empty()
+            || id.len() > MAX_NODE_NAME_BYTES
+            || id.ends_with(".monitor")
+            || id.chars().any(char::is_control)
+        {
+            continue;
+        }
+        let label = property_string(object, "node.description")
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+            .unwrap_or_else(|| id.clone());
+        inputs.insert(id.clone(), MicrophoneInput { id, label });
+        if inputs.len() > 128 {
+            return Err(GameAudioNodeError::RegistryTooLarge);
+        }
+    }
+    Ok(inputs.into_values().collect())
+}
+
 /// Select one microphone source from `PipeWire` registry metadata.
 ///
 /// A preferred node name is used when supplied; without one exactly one
@@ -300,6 +371,22 @@ mod tests {
         .concat()
     }
 
+    #[test]
+    fn enumerates_named_inputs_with_labels_and_excludes_output_nodes() {
+        let registry=br#"[{"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":"usb-mic","node.description":"USB microphone"}}},{"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Sink","node.name":"speakers"}}},{"type":"PipeWire:Interface:Node","info":{"props":{"media.class":"Audio/Source","node.name":"speakers.monitor"}}}]"#;
+        assert_eq!(
+            microphone_inputs_from_registry(registry).unwrap(),
+            vec![MicrophoneInput {
+                id: "usb-mic".into(),
+                label: "USB microphone".into()
+            }]
+        );
+        for malformed in [b"malformed".as_slice(), b"[bad]", b"[{},]", b"{}"] {
+            assert!(microphone_inputs_from_registry(malformed).is_err());
+        }
+        assert!(microphone_inputs_from_registry(b"[ ]").unwrap().is_empty());
+        assert!(microphone_inputs_from_registry(&vec![b' '; MAX_REGISTRY_BYTES + 1]).is_err());
+    }
     #[test]
     fn selects_only_one_game_owned_playback_node() {
         let data = registry(&format!(

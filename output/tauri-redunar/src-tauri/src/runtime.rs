@@ -396,6 +396,8 @@ pub struct ReplayStorageStatusDto {
     used_bytes: u64,
     storage_limit_bytes: u64,
     bytes_over_limit: u64,
+    available_bytes: Option<u64>,
+    total_bytes: Option<u64>,
 }
 
 #[tauri::command]
@@ -403,12 +405,15 @@ pub fn replay_storage_status() -> Result<ReplayStorageStatusDto, String> {
     let status = crate::backend::service()
         .replay_storage_status()
         .map_err(|error| error.to_string())?;
+    let capacity = redunar_daemon::ReplayClipStore::filesystem_capacity(&status.directory);
     Ok(ReplayStorageStatusDto {
         initialized: status.initialized,
         owned_clips: status.owned_clips,
         used_bytes: status.used_bytes,
         storage_limit_bytes: status.storage_limit_bytes,
         bytes_over_limit: status.bytes_over_limit,
+        available_bytes: capacity.map(|c| c.0),
+        total_bytes: capacity.map(|c| c.1),
     })
 }
 
@@ -695,12 +700,17 @@ pub fn set_replay_microphone(
 }
 
 #[tauri::command]
-pub fn set_replay_save_parent(parent: Option<String>) -> Result<ReplayPreferencesDto, String> {
+pub fn set_replay_save_parent(
+    parent: Option<String>,
+    exports: tauri::State<'_, crate::clip_export::ClipExports>,
+) -> Result<ReplayPreferencesDto, String> {
     crate::backend::ensure_write_access()?;
-    crate::backend::service()
-        .set_replay_save_parent(parent.map(std::path::PathBuf::from))
-        .map_err(|error| error.to_string())?;
-    replay_preferences_dto()
+    exports.with_idle(|| {
+        crate::backend::service()
+            .set_replay_save_parent(parent.map(std::path::PathBuf::from))
+            .map_err(|e| e.to_string())?;
+        replay_preferences_dto()
+    })
 }
 
 #[tauri::command]
@@ -745,4 +755,56 @@ pub fn hide_replay_menu(window: tauri::Window) -> Result<(), String> {
         .game_session_coordinator()
         .close_replay_menu();
     window.hide().map_err(|error| error.to_string())
+}
+
+#[derive(Serialize)]
+pub struct MicrophoneInputDto {
+    id: String,
+    label: String,
+}
+#[tauri::command]
+pub async fn microphone_inputs() -> Result<Vec<MicrophoneInputDto>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::backend::service()
+            .microphone_inputs()
+            .map(|inputs| {
+                inputs
+                    .into_iter()
+                    .map(|input| MicrophoneInputDto {
+                        id: input.id,
+                        label: input.label,
+                    })
+                    .collect()
+            })
+            .map_err(|_| {
+                "Microphone inputs are unavailable. Check the sound server and audio utilities."
+                    .to_owned()
+            })
+    })
+    .await
+    .map_err(|_| "Microphone discovery stopped unexpectedly".to_owned())?
+}
+
+#[tauri::command]
+pub fn pick_replay_folder() -> Result<Option<String>, String> {
+    use gtk::prelude::*;
+    crate::backend::ensure_write_access()?;
+    let dialog = gtk::FileChooserNative::new(
+        Some("Choose a replay folder"),
+        None::<&gtk::Window>,
+        gtk::FileChooserAction::SelectFolder,
+        Some("Choose"),
+        Some("Cancel"),
+    );
+    dialog.set_select_multiple(false);
+    let result = if dialog.run() == gtk::ResponseType::Accept {
+        dialog
+            .filename()
+            .filter(|p| p.is_absolute() && p.is_dir())
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    dialog.destroy();
+    Ok(result)
 }

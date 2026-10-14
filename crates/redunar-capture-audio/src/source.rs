@@ -114,6 +114,47 @@ impl AudioCaptureSource {
     }
 }
 
+/// Enumerate available inputs without starting recording. Discovery commands
+/// reuse the existing output byte/deadline bounds outside capture callbacks.
+///
+/// # Errors
+/// Unavailable sound servers or malformed discovery data return an explicit error.
+pub fn microphone_inputs() -> Result<Vec<crate::MicrophoneInput>, AudioCaptureError> {
+    if let Ok(registry) = inspect_pipewire_registry()
+        && let Ok(inputs) = crate::microphone_inputs_from_registry(&registry)
+    {
+        return Ok(inputs);
+    }
+    let pactl = system_utility(PACTL_PATH, "pactl").ok_or_else(|| {
+        AudioCaptureError::new(
+            "Microphone inputs are unavailable. Check the sound server and audio utilities.",
+        )
+    })?;
+    let output = run_discovery_command(
+        Command::new(pactl).args(["list", "short", "sources"]),
+        64 * 1024,
+    )?;
+    Ok(microphone_inputs_from_pulse(&output))
+}
+fn microphone_inputs_from_pulse(output: &[u8]) -> Vec<crate::MicrophoneInput> {
+    let mut inputs = std::collections::BTreeMap::new();
+    for line in String::from_utf8_lossy(output).lines().take(128) {
+        let Some(id) = line.split_whitespace().nth(1).and_then(valid_sink_name) else {
+            continue;
+        };
+        if !id.ends_with(".monitor") {
+            inputs.insert(
+                id.clone(),
+                crate::MicrophoneInput {
+                    id: id.clone(),
+                    label: id,
+                },
+            );
+        }
+    }
+    inputs.into_values().collect()
+}
+
 /// Find available microphone input routes in preference order.
 ///
 /// Resolves the desktop default input, with native `PipeWire` preferred and
@@ -812,6 +853,12 @@ fn capture_command(source: &AudioCaptureSource) -> Result<Command, AudioCaptureE
 mod tests {
     use super::*;
 
+    #[test]
+    fn pulse_inputs_exclude_monitors_and_invalid_names() {
+        let inputs=microphone_inputs_from_pulse(b"1\tusb-mic\tdriver\tRUNNING\n2\tspeakers.monitor\tdriver\tIDLE\n3\tusb-mic\tdriver\tIDLE\n");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].id, "usb-mic");
+    }
     #[test]
     fn default_input_metadata_and_legacy_pulse_info_are_selected_without_guessing() {
         assert_eq!(

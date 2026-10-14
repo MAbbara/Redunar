@@ -14,7 +14,7 @@ gi.require_version('Gtk','3.0')
 gi.require_version('WebKit2','4.1')
 from gi.repository import GLib, Gtk, Gdk, GdkPixbuf, WebKit2
 NATIVE=Path(__file__).resolve().parents[1]
-ARTIFACTS=NATIVE.parents[1]/'target/ui-review'
+ARTIFACTS=NATIVE.parents[1]/'.redunar-build/reports/workspace-ui'
 ARTIFACTS.mkdir(parents=True,exist_ok=True)
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self,*_): pass
@@ -30,8 +30,10 @@ const posterFixture=artworkFixture(300,450,'Poster');
 const bannerFixture=artworkFixture(1200,350,'Landscape banner');
 const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
 const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
-function replayPreferencesFixture(){return {microphone_mode:bridge.microphone||'off',microphone_source:null,initial_save_duration_seconds:30,resolved_directory:'/fixture/Videos/Redunar Replays',custom_save_parent:'/fixture',close_overlay_on_outside_click:bridge.outsideClick!==false};}
+function replayPreferencesFixture(){return {microphone_mode:bridge.microphone||'off',microphone_source:bridge.source||null,initial_save_duration_seconds:30,resolved_directory:(bridge.folder??'/fixture/Videos')+'/Redunar Replays',custom_save_parent:bridge.folder??null,close_overlay_on_outside_click:bridge.outsideClick!==false};}
 const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/usr/bin/steam',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
+const catalogCase=new URLSearchParams(location.search).get('catalog');
+if(catalogCase){bridge.catalog=catalogCase==='populated'?games:[];bridge.idle=true;bridge.startupUpdateAvailable=false;bridge.catalogPending=catalogCase==='pending';bridge.catalogFailure=catalogCase==='failed';}
 window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args={})=>{
  bridge.calls.push({command,args:structuredClone(args)});
  if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
@@ -48,14 +50,19 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='module_statuses')return structuredClone(bridge.modules);
  if(command==='discover_games')return structuredClone(bridge.discovered||[]);
  if(command==='import_discovered_games'){await new Promise(resolve=>setTimeout(resolve,180));if(bridge.failImport)throw Error('Another Redunar app owns the backend session. Close it, then reopen this app before editing saved data.');return structuredClone(games);}
- if(command==='catalog_games')return structuredClone(games);
+ if(command==='catalog_games'){if(bridge.catalogPending)await new Promise(resolve=>bridge.releaseCatalog=resolve);if(bridge.catalogFailure)throw Error('Fixture catalog unavailable');return structuredClone(bridge.catalog??games);}
  if(command==='game_installation_statuses'){if(bridge.installationFailure)throw Error('Fixture library unavailable');return bridge.installation||{'1':'installed','2':'installed'};}
  if(command==='game_poster')return posterFixture;
  if(command==='game_banner')return args.gameId==='1'?bannerFixture:null;
- if(command==='replay_clips')return Array.from({length:3},(_,i)=>({file_name:`redunar-replay-1789254367-629872093-${i+1}-a-long-capture-filename.mkv`,title:`Capture ${i+1}`,game_name:i===0?games[0].name:null,bytes:68000000,modified_unix_ns:'1789300000000000000',duration_seconds:30}));
+ if(command==='replay_clips')return bridge.clips??=Array.from({length:3},(_,i)=>({file_name:`redunar-replay-1789254367-629872093-${i+1}-a-long-capture-filename.mkv`,title:`Capture ${i+1}`,game_name:i===0?games[0].name:null,bytes:68000000,modified_unix_ns:'1789300000000000000',duration_seconds:30}));
  if(command==='clip_metadata')return {duration_seconds:30,width:640,height:360,fps:60};
  if(command==='clip_thumbnail')return captureFixture;
- if(command==='replay_storage_status')return {used_bytes:0};
+ if(command==='replay_storage_status')return {used_bytes:204000000,available_bytes:bridge.lowDisk?950000000:137400000000,total_bytes:512000000000};
+ if(command==='microphone_inputs'){if(bridge.failInputs)throw Error('Fixture audio server unavailable');return [{id:'usb-mic',label:'USB microphone'},{id:'internal-mic',label:'Internal microphone'}];}
+ if(command==='pick_replay_folder')return bridge.pickedFolder??null;
+ if(command==='set_replay_save_parent'){bridge.folder=args.parent;return replayPreferencesFixture();}
+ if(command==='set_clip_details'){await new Promise(r=>setTimeout(r,80));if(bridge.failFavorite)throw Error('Fixture favorite persistence failed');const c=bridge.clips.find(c=>c.file_name===args.fileName);c.favorite=args.favorite;return {file_name:c.file_name,favorite:c.favorite};}
+ if(command==='rename_replay_clip'){await new Promise(r=>setTimeout(r,80));if(bridge.failRename)throw Error('A clip with that filename already exists');const c=bridge.clips.find(c=>c.file_name===args.fileName);c.file_name=args.newFileName;return {file_name:c.file_name,favorite:Boolean(c.favorite)};}
  if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates,diagnostic_log:bridge.logRequested===true,diagnostic_log_status:bridge.logStatus||'off'};
  if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
  if(command==='set_diagnostic_log'){bridge.logRequested=args.enabled;return {diagnostic_log:args.enabled,diagnostic_log_status:bridge.logStatus||'off'};}
@@ -73,7 +80,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
  if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {...replayPreferencesFixture(),overlay_shortcut:values.shortcuts.overlay||''};}
  if(command==='steam_setup_status'){if(bridge.failSteamSetup)throw Error('Fixture Steam setup unavailable');return bridge.steamSetup||{available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};}
- if(command==='set_replay_microphone'){await new Promise(resolve=>setTimeout(resolve,80));if(bridge.failMicrophone)throw Error('Fixture microphone write failed');bridge.microphone=args.mode;return replayPreferencesFixture();}
+ if(command==='set_replay_microphone'){await new Promise(resolve=>setTimeout(resolve,80));if(bridge.failMicrophone)throw Error('Fixture microphone write failed');bridge.microphone=args.mode;bridge.source=args.source||null;return replayPreferencesFixture();}
  if(command==='replay_preferences')return replayPreferencesFixture();
  if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
  if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
@@ -83,7 +90,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async
  return {};
 }};
 window.check=(condition,message)=>{if(!condition)throw new Error(message)};
-window.q=s=>document.querySelector(s);
+window.q=s=>document.querySelector(s);window.qa=s=>Array.from(document.querySelectorAll(s));
 window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
 """
 resolution_copy = re.search(r'Some\(ReplaySourceRejection::DimensionsUnsupported\) =>\s*(?:\{\s*)?"([^"]+)"', (NATIVE/'src-tauri/src/runtime.rs').read_text()).group(1)
@@ -119,35 +126,56 @@ def test(name,source,wait_ms=0):
     js(source);checks.append(name)
     if wait_ms: pump(wait_ms)
 try:
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/?catalog=pending#overview');pump(900)
+    test('A pending catalog never displays first-game guidance',"check(q('#library-start-guide').hidden,'loading is not an empty library');check(!q('#steam-capture-guide'),'old Steam banner removed');bridge.catalogPending=false;bridge.releaseCatalog();")
+    wait_for("!q('#library-start-guide').hidden")
+    test('An empty loaded catalog has a neutral first-game action',"const guide=q('#library-start-guide');check(guide.querySelector('strong').textContent==='Add your first game','first-use title');check(guide.querySelector('p').textContent==='Add or scan games in Library to get started.','launcher-neutral instruction');check(guide.querySelector('a').textContent==='Open Library'&&guide.querySelector('a').getAttribute('href')==='#library','library destination');")
+    snap('overview-empty-library')
+    window.resize(640,720);pump()
+    test('First-game guidance fits a narrow window',"const guide=q('#library-start-guide').getBoundingClientRect(),button=q('#library-start-guide .button').getBoundingClientRect();check(button.left>=guide.left&&button.right<=guide.right,'action fits guide');check(document.documentElement.scrollWidth<=innerWidth+1,'no horizontal overflow');")
+    snap('overview-empty-library-narrow')
+    window.resize(1440,1000);pump()
+    js("click('#library-start-guide a')");pump(400)
+    test('First-game action opens the empty Library',"check(location.hash==='#library','Library opened');check(q('[data-action=add-game]')&&q('[data-action=scan-games]'),'add and scan available');bridge.catalog=games;click('[data-action=reload-games]');",400)
+    route('overview')
+    test('Saving catalog entries removes first-game guidance',"check(q('#library-start-guide').hidden,'saved games hide guidance');")
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/?catalog=failed#overview');pump(1800)
+    test('A failed catalog read never displays first-game guidance',"check(q('#library-start-guide').hidden,'failure is not an empty library');")
+    route('library')
+    test('Library read failure remains visible and can recover to an empty catalog',"check(q('.empty-panel').textContent.includes('Fixture catalog unavailable'),'read failure explained');bridge.catalogFailure=false;click('[data-action=reload-games]');",400)
+    route('overview')
+    test('Recovered empty catalog displays guidance',"check(!q('#library-start-guide').hidden,'successful empty retry shows guidance');")
+    view.load_uri(f'http://127.0.0.1:{server.server_port}/?catalog=populated#overview');pump(1800)
+    test('An idle session with saved games has no first-game banner',"check(q('#library-start-guide').hidden,'idle populated library hides guidance');")
     view.load_uri(f'http://127.0.0.1:{server.server_port}/#overview');pump(1800)
     test('Startup update notice directs the user to Settings',"check(q('#toast').textContent==='A Redunar update is available. Open Settings to install it.','clear startup update action')")
     test('Real overview values and compact session footer',"check(q('#ram-used').textContent==='12.0 GiB','RAM');check(q('#session-timer').textContent==='32:18','timer');check(q('#session-captures').textContent==='3 captures saved','captures');check(q('.session-end').contains(q('[data-action=end-session]')),'timer adjacent to end');window.plot=q('#live-chart');click('[data-overview-view=fps]');check(q('#live-chart')===plot,'graph toggle does not remount page');check(q('#overview-chart-label').textContent==='Frame rate','FPS selector');")
     snap('overview')
     route('replay')
-    js('bridge.replayUnavailable=true');wait_for("q('#replay-phase')?.textContent===fixtureResolutionRejection")
-    test('Resolution rejection explains game resolution and recording rate',"check(q('#replay-phase').textContent.includes(\"Lower the game's resolution or recording frame rate\"),'actionable resolution/rate');check(!q('#replay-phase').textContent.includes('window size'),'fullscreen-independent copy');check(document.documentElement.scrollWidth<=innerWidth,'no page overflow');")
+    js('bridge.replayUnavailable=true');wait_for("q('.capture-status-detail')?.textContent===fixtureResolutionRejection")
+    test('Resolution rejection explains game resolution and recording rate',"check(q('.capture-status-detail').textContent.includes(\"Lower the game's resolution or recording frame rate\"),'actionable resolution/rate');check(!q('.capture-status-detail').textContent.includes('window size'),'fullscreen-independent copy');check(document.documentElement.scrollWidth<=innerWidth,'no page overflow');")
     snap('ultrawide-resolution-rejection')
-    js('bridge.replayUnavailable=false');wait_for("q('#replay-status-title').textContent==='Ready to save'")
-    test('Save duration changes keep controls beside the shortcut at wide widths',"window.saveRow=q('.replay-save-row');window.saveButton=q('[data-action=save-replay]');window.saveSelect=q('#save-duration');window.saveButtonX=saveButton.getBoundingClientRect().left;window.saveSelectX=saveSelect.nextElementSibling.getBoundingClientRect().left;for(const option of saveSelect.options){saveSelect.value=option.value;saveSelect.dispatchEvent(new Event('change',{bubbles:true}));check(q('.replay-save-row')===saveRow&&q('[data-action=save-replay]')===saveButton,'controls stay mounted');check(Math.abs(saveButton.getBoundingClientRect().left-saveButtonX)<1,'save position stable');check(Math.abs(saveSelect.nextElementSibling.getBoundingClientRect().left-saveSelectX)<1,'duration position stable');check(q('#save-replay-shortcut').hidden===(option.value!=='30'),'only assigned duration shows shortcut');}saveSelect.value='30';saveSelect.dispatchEvent(new Event('change',{bubbles:true}));")
-    js("q('#toast').hidden=true;q('.replay-save-row').scrollIntoView({block:'center'})");pump();snap('replay-save-assigned')
+    js('bridge.replayUnavailable=false');wait_for("q('.capture-status-heading').textContent==='Ready to save'")
+    test('Save duration changes keep controls beside the shortcut at wide widths',"window.saveRow=q('.replay-capture-bar');window.saveButton=q('[data-action=save-replay]');window.saveSelect=q('#save-duration');window.saveButtonX=saveButton.getBoundingClientRect().left;window.saveSelectX=saveSelect.nextElementSibling.getBoundingClientRect().left;for(const option of saveSelect.options){saveSelect.value=option.value;saveSelect.dispatchEvent(new Event('change',{bubbles:true}));check(q('.replay-capture-bar')===saveRow&&q('[data-action=save-replay]')===saveButton,'controls stay mounted');check(Math.abs(saveButton.getBoundingClientRect().left-saveButtonX)<1,'save position stable');check(Math.abs(saveSelect.nextElementSibling.getBoundingClientRect().left-saveSelectX)<1,'duration position stable');check(q('#save-replay-shortcut').hidden===(option.value!=='30'),'only assigned duration shows shortcut');}saveSelect.value='30';saveSelect.dispatchEvent(new Event('change',{bubbles:true}));")
+    js("q('#toast').hidden=true;q('.replay-capture-bar').scrollIntoView({block:'center'})");pump();snap('replay-save-assigned')
     js("q('#save-duration').value='120';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}))");snap('replay-save-unassigned')
     window.resize(640,950);pump()
-    test('Compact save controls stay inside the card across durations',"const row=q('.replay-save-row').getBoundingClientRect(),button=q('[data-action=save-replay]'),select=q('#save-duration');const before=button.getBoundingClientRect();for(const option of select.options){select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));const rect=button.getBoundingClientRect();check(Math.abs(rect.left-before.left)<1&&Math.abs(rect.top-before.top)<1,'compact controls do not move');check(rect.left>=row.left&&rect.right<=row.right,'save button fits');check(q('.replay-shortcut-slot').getBoundingClientRect().right<=row.right,'shortcut fits');}check(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow');q('.replay-save-row').scrollIntoView({block:'center'});")
+    test('Compact save controls stay inside the card across durations',"const row=q('.replay-capture-bar').getBoundingClientRect(),button=q('[data-action=save-replay]'),select=q('#save-duration');const before=button.getBoundingClientRect();for(const option of select.options){select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));const rect=button.getBoundingClientRect();check(Math.abs(rect.left-before.left)<1&&Math.abs(rect.top-before.top)<1,'compact controls do not move '+option.value+' before '+JSON.stringify(before.toJSON())+' after '+JSON.stringify(rect.toJSON()));check(rect.left>=row.left&&rect.right<=row.right,'save button fits');check(q('.replay-shortcut-slot').getBoundingClientRect().right<=row.right,'shortcut fits');}check(document.documentElement.scrollWidth<=innerWidth,'no horizontal overflow');q('.replay-capture-bar').scrollIntoView({block:'center'});")
     pump();snap('replay-save-compact')
     window.resize(1440,1000);pump()
-    js("bridge.replayWaiting=true");wait_for("q('#replay-status-title').textContent==='Waiting for Replay frames'")
-    test('Waiting frame source uses pending styling and disables save',"check(q('#replay-status-dot').dataset.status==='pending','not a hardware error');check(q('[data-action=save-replay]').disabled,'no save without frames');")
+    js("bridge.replayWaiting=true");wait_for("q('.capture-status-heading').textContent==='Waiting for Replay frames'")
+    test('Waiting frame source uses pending styling and disables save',"check(q('.capture-summary').dataset.state==='pending','not a hardware error');check(q('[data-action=save-replay]').disabled,'no save without frames');")
     js("q('.window-content').scrollTo(0,0)");pump();snap('replay-waiting')
-    js('bridge.replayFailure=true');wait_for("q('#replay-status-dot').dataset.status==='error'")
-    test('Encoder failure remains visible over pending status',"check(q('#replay-phase').textContent.includes('video encoder failed'),'encoder error preserved');check(q('[data-action=save-replay]').disabled,'failed encoder cannot save');")
+    js('bridge.replayFailure=true');wait_for("q('.capture-summary').dataset.state==='error'")
+    test('Encoder failure remains visible over pending status',"check(q('.capture-status-detail').textContent.includes('video encoder failed'),'encoder error preserved');check(q('[data-action=save-replay]').disabled,'failed encoder cannot save');")
     snap('replay-encoder-failure')
-    js('bridge.replayFailure=false;bridge.replayWaiting=false');wait_for("q('#replay-status-title').textContent==='Ready to save'")
+    js('bridge.replayFailure=false;bridge.replayWaiting=false');wait_for("q('.capture-status-heading').textContent==='Ready to save'")
     route('overview')
-    test('Overview uses settings for visibility and points to Steam setup',"check(!q('[data-action=session-overlay]'),'no duplicate live button');check(q('#steam-capture-guide a').getAttribute('href')==='#library','setup link');check(q('#steam-capture-guide').hidden,'guide hidden during session');")
-    js('bridge.idle=true');wait_for("!q('#steam-capture-guide').hidden")
-    test('Idle Overview makes Steam capture setup discoverable',"check(q('#steam-capture-guide').textContent.includes('Set up each game once'),'setup explanation');check(q('#steam-capture-guide a').textContent==='Set up Steam capture','setup action');")
-    snap('steam-play-overview')
-    js('bridge.idle=false');wait_for("q('#steam-capture-guide').hidden")
+    test('Overview keeps visibility in settings and onboarding out of a populated catalog',"check(!q('[data-action=session-overlay]'),'no duplicate live button');check(q('#library-start-guide').hidden,'saved library hides first-game guidance');")
+    js('bridge.idle=true');wait_for("q('[data-action=end-session]').hidden")
+    test('Ending a session does not restore onboarding for saved games',"check(q('#library-start-guide').hidden,'idle saved library has no onboarding');")
+    snap('overview-library-configured')
+    js('bridge.idle=false');wait_for("!q('[data-action=end-session]').hidden")
     route('library');pump(300)
     test('Library uses independent landscape and portrait artwork',"const banner=q('.game-cover-banner img'),poster=q('.library-game img');check(banner?.naturalWidth===1200&&banner.naturalHeight===350,'wide banner received');check(poster?.naturalWidth===300&&poster.naturalHeight===450,'portrait retained in catalog');check(banner.src!==poster.src,'separate artwork caches');check(getComputedStyle(q('.game-cover-banner')).position==='absolute','banner is outside layout flow');const card=q('.game-cover').getBoundingClientRect();check(card.height<260,'image does not expand header');check(Math.abs(banner.getBoundingClientRect().width-card.width)<2,'banner spans header');")
     test('Library inheritance and readiness use the approved layout',"check(q('.inheritance-banner strong').textContent==='Uses global settings','inheritance heading');check(q('.inheritance-banner p').textContent.includes('apply to this game'),'inheritance explanation');check(document.querySelectorAll('[data-readiness-status]').length===3,'inline readiness');check(q('[data-readiness-status]').dataset.ready==='true','observed ready dot');check(!q('.override-control .pill'),'no duplicated inherited badge');check(q('.game-save-bar').hidden,'clean library has no action bar');check(!q('.detail-body .game-save-bar'),'bar outside settings panel');check(q('.game-profile-footer').getBoundingClientRect().bottom+20<=q('.game-profile-footer+.small-note').getBoundingClientRect().top,'note spacing');")
@@ -258,7 +286,7 @@ try:
     test('Empty shortcut set saves and disables keyboard activation',"const saved=bridge.calls.findLast(c=>c.command==='save_shortcuts');check(Object.values(saved.args.shortcuts).every(v=>!v),'empty assignments submitted');check(q('#toast').textContent.includes('All shortcuts cleared'),'clear feedback');check(!q('[data-action=save-global]')||q('[data-action=save-global]').disabled,'saved shortcuts clean');")
     snap('shortcuts-cleared')
     route('replay')
-    test('Cleared save shortcuts leave no empty badge column',"check(q('.replay-shortcut-slot').hidden,'no reserved space without save bindings');check(q('#save-replay-shortcut').hidden,'no blank shortcut');check(!q('[data-action=save-replay]').disabled,'app save remains available');q('.replay-save-row').scrollIntoView({block:'center'});")
+    test('Cleared save shortcuts leave no empty badge column',"check(q('.replay-shortcut-slot').hidden,'no reserved space without save bindings');check(q('#save-replay-shortcut').hidden,'no blank shortcut');check(!q('[data-action=save-replay]').disabled,'app save remains available');q('.replay-capture-bar').scrollIntoView({block:'center'});")
     pump();snap('replay-save-cleared')
     route('global');js("click('[data-global-tab=shortcuts]')");pump()
     test('Save shortcut works without a menu shortcut',"const input=document.querySelectorAll('[data-shortcut]')[1];input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'F8',bubbles:true}));click('[data-action=save-global]');",350)
@@ -383,16 +411,48 @@ try:
     test('Automatic update preference persists independently',"check(bridge.calls.findLast(c=>c.command==='set_automatic_updates').args.enabled===false,'automatic checks disabled');check(!q('[data-preference=automatic-updates]').checked,'saved update preference shown');click('[data-action=check-for-updates]');")
     pump();test('Manual update check reports authenticated-source readiness honestly',"check(bridge.calls.some(c=>c.command==='check_for_updates'),'manual native check');check(q('[data-update-state]').textContent==='Source pending','honest readiness state');check(q('#toast').textContent.includes('not configured'),'honest check feedback');")
     snap('settings-updates')
+    route('overview')
+    test('Shared capture bar saves directly on Overview',"check(q('.capture-status-heading').textContent==='Ready to save','ready summary');check(!q('.capture-summary-actions'),'no extra editor link');q('#save-duration').value='60';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}));check(q('#save-replay-shortcut').hidden,'no invented binding');")
+    route('replay')
+    test('Duration selection carries between Overview and Replay',"check(q('#save-duration').value==='60','shared selected duration');q('#save-duration').value='30';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}));check(q('#save-replay-shortcut').textContent===(values.shortcuts['30']||''),'saved binding only');check(!q('[data-player=mute]')&&!q('#player-volume'),'no playback audio controls');window.retainedVideo=q('#clip-video');")
+    test('Duplicate favorite actions submit once and preserve the player',"window.favoriteBefore=bridge.calls.filter(c=>c.command==='set_clip_details').length;click('[data-favorite-clip]');click('[data-favorite-clip]');",200)
+    test('Favorite is persisted through the native DTO and survives reload',"check(bridge.calls.filter(c=>c.command==='set_clip_details').length===favoriteBefore+1,'one pending mutation');check(q('[data-favorite-clip]').getAttribute('aria-pressed')==='true','favorite acknowledged');check(q('#clip-video')===retainedVideo,'player mounted');click('[data-action=reload-clips]');",200)
+    test('Failed favorite persistence retains the saved state',"bridge.failFavorite=true;click('[data-favorite-clip]');",200)
+    test('Favorite failure remains recoverable and preserves playback',"check(q('[data-favorite-clip]').getAttribute('aria-pressed')==='true','saved favorite retained');check(q('#toast').textContent.includes('Fixture favorite persistence failed'),'error shown');bridge.failFavorite=false;")
+    test('Favorites and empty search can be cleared without remounting the video',"window.retainedVideo=q('#clip-video');click('[data-clip-scope=favorites]');check(qa('[data-clip]').length===1,'favorite scope');q('#clip-search').value='no possible match';q('#clip-search').dispatchEvent(new Event('input',{bubbles:true}));check(q('.clip-empty strong').textContent==='No matching clips','plain empty state');click('[data-action=clear-clip-filters]');check(qa('[data-clip]').length===3,'cleared scopes');check(q('#clip-video')===retainedVideo,'retained playback');")
+    test('Filename editor hides the extension',"click('[data-action=edit-clip-filename]');check(!q('[name=newFileName]').value.endsWith('.mkv'),'stem only');check(!q('#dialog-body').textContent.includes('Keep .mkv'),'no extension explanation');q('[name=newFileName]').value='A renamed recording';bridge.failRename=true;q('#clip-filename-form').requestSubmit();",200)
+    test('Collision keeps the dialog, stem and original selected filename',"check(q('#dialog').open,'failure retained');check(q('#dialog-error').textContent.includes('already exists'),'collision explanation');check(q('[name=newFileName]').value==='A renamed recording','draft retained');check(q('[data-selected-clip-title]').textContent.includes('redunar-replay'),'original retained');bridge.failRename=false;q('#clip-filename-form').requestSubmit();",200)
+    test('Rename updates actual filename while preserving game favorite and mounted player',"check(q('[data-selected-clip-title]').textContent==='A renamed recording.mkv','filename returned by native');check(q('.native-video-caption strong').textContent===games[0].name,'game retained');check(q('[data-favorite-clip]').getAttribute('aria-pressed')==='true','favorite retained');check(q('#clip-video')===retainedVideo,'player not rebuilt');check(!q('#dialog').open,'success closes editor');")
+    test('Storage differentiates real drive capacity from recording bytes',"check(q('.storage-free').textContent.includes('137.4 GB'),'free capacity');check(q('.drive-scale').textContent.includes('512.0 GB total'),'drive capacity');check(q('.storage-recordings').textContent.includes('204.0 MB'),'recording size');bridge.lowDisk=true;click('[data-action=reload-clips]');",200)
+    test('Low space has user controlled guidance without recording deletion',"check(q('.storage-warning').textContent.includes('Low disk space'),'warning');check(qa('[data-clip]').length===3,'clips retained');bridge.lowDisk=false;")
+    test('Sidebar collapses across page navigation',"click('[data-sidebar-toggle]');check(document.documentElement.dataset.sidebar==='collapsed','collapsed');check(q('[data-sidebar-toggle]').getAttribute('aria-label')==='Expand sidebar','accessible expansion');")
+    route('history')
+    test('History comparison requires an explicit same-game session',"check(document.documentElement.dataset.sidebar==='collapsed','shared presentation');check(!q('.history-comparison'),'no automatic comparison');const options=Array.from(q('#comparison-session').options);check(options.length===2,'one same-game peer and empty choice');q('#comparison-session').value='2';q('#comparison-session').dispatchEvent(new Event('change',{bubbles:true}));check(q('.history-comparison'),'explicit comparison');click('[data-sidebar-toggle]');")
+    route('global');js("click('[data-global-tab=replay]');bridge.idle=true;window.dispatchEvent(new Event('focus'))")
+    wait_for("!q('[data-replay-preference=microphone]').disabled")
+    js("q('[data-replay-preference=microphone]').click()");pump(200)
+    wait_for("!q('[data-microphone-source]').disabled")
+    test('Input selection applies through native preferences',"q('[data-microphone-source]').value='usb-mic';q('[data-microphone-source]').dispatchEvent(new Event('change',{bubbles:true}));",200)
+    test('Input save failure leaves the actual saved selection visible',"check(q('[data-microphone-source]').value==='usb-mic','saved USB input');bridge.failMicrophone=true;q('[data-microphone-source]').value='internal-mic';q('[data-microphone-source]').dispatchEvent(new Event('change',{bubbles:true}));",200)
+    test('Input discovery failure offers retry without clearing the saved input',"check(q('[data-microphone-source]').value==='usb-mic','failed write preserved saved input');bridge.failMicrophone=false;bridge.failInputs=true;click('[data-action=reload-microphone-devices]');",200)
+    test('Unavailable saved input is explicit and can recover after discovery retry',"check(q('[data-microphone-source]').value==='usb-mic','no silent default substitution');check(q('.microphone-device').textContent.includes('Saved input unavailable'),'unplugged indication');check(q('.microphone-device').textContent.includes('Fixture audio server unavailable'),'error shown');bridge.failInputs=false;click('[data-action=reload-microphone-devices]');",200)
+    test('Native folder picker cancellation retains the folder',"check(q('[data-microphone-source]').value==='usb-mic','retry recovered');click('[data-action=change-replay-folder]');bridge.pickedFolder=null;click('[data-pick-folder]');",100)
+    test('Folder selection passes a parent and default reset does not move media',"check(q('[name=parent]').value==='','cancel retained field');bridge.pickedFolder='/fixture/Captures';click('[data-pick-folder]');",100)
+    js("check(q('[name=parent]').value==='/fixture/Captures','native selection');q('#replay-folder-form').requestSubmit();");pump(200)
+    test('Default folder label is clear and resets only saved parent',"check(q('.path-value').textContent==='/fixture/Captures/Redunar Replays','owned child');check(q('[data-action=reset-replay-folder]').textContent==='Use default folder','plain reset label');click('[data-action=reset-replay-folder]');",200)
+    test('Default folder reset preserves all recording entries',"check(bridge.calls.findLast(c=>c.command==='set_replay_save_parent').args.parent===null,'default parent');check(bridge.clips.length===3,'no recordings moved/deleted');check(q('.path-value').textContent==='/fixture/Videos/Redunar Replays','default child');bridge.idle=false;")
+    route('replay');snap('replay-integrated')
     route('replay');snap('replay-loading')
-    test('Replay cards lead with the recording game',"const first=q('[data-clip]');check(first.querySelector('.clip-game').textContent===games[0].name,'game is primary label');check(first.querySelector('.clip-file').textContent.includes('redunar-replay'),'filename remains available');check(q('.native-video-caption strong').textContent===games[0].name,'selected player names game');")
+    test('Replay cards show filename and retain recorded game',"const first=q('[data-clip]');check(first.querySelector('.clip-game').textContent===games[0].name,'game attribution remains visible');check(first.querySelector('.clip-title').textContent==='A renamed recording.mkv','filename remains available');check(q('.native-video-caption strong').textContent===games[0].name,'selected player names game');")
     test('Obsolete replay preview controls are absent',"check(!q('[data-action=preview-replay-menu]'),'no preview action');check(!q('#replay-preview'),'no preview dialog');")
     route('overview');js('bridge.unavailable=true');wait_for("q('#ram-used').textContent==='—'");test('Unavailable RAM never displays stale measurements',"check(q('#ram-used').textContent==='—','RAM cleared');check(q('#ram-meter').style.width==='0%','unavailable meter cleared');bridge.unavailable=false;")
     window.resize(1040,900);pump();route('history');js("q('#toast').hidden=true;q('.history-timeline-chart').scrollIntoView({block:'start'})");snap('history-compact')
     test('History remains readable at compact width',"check(document.documentElement.scrollWidth<=innerWidth+1,'history overflow');check(q('.history-timeline-chart svg').getBoundingClientRect().width>200,'plot remains visible');")
+    js("bridge.idle=true");pump(2400)
     route('global');snap('global-compact')
     test('Compact window does not overflow horizontally',"check(document.documentElement.scrollWidth<=innerWidth+1,'horizontal overflow');check(bridge.errors.length===0,bridge.errors.join('; '));")
     js("click('[data-global-tab=overlay]');q('[data-global=overlay]').click();q('#toast').hidden=true")
-    test('Compact global draft actions remain at window bottom',"const rect=q('.settings-save-bar').getBoundingClientRect();check(Math.abs(innerHeight-rect.bottom-16)<1,'compact bottom');check(rect.right<=innerWidth,'compact right edge');")
+    test('Compact global draft actions remain at window bottom',"const rect=q('.settings-save-bar').getBoundingClientRect();check(Math.abs(innerHeight-rect.bottom-16)<1,'compact bottom '+JSON.stringify({width:innerWidth,height:innerHeight,bottom:rect.bottom,sidebar:document.documentElement.dataset.sidebar}));check(rect.right<=innerWidth,'compact right edge');")
     snap('global-dirty-compact')
     window.resize(640,720);pump()
     test('Narrow draft actions fit the viewport and hide after discard',"const bar=q('.settings-save-bar'),rect=bar.getBoundingClientRect();check(Math.abs(innerHeight-rect.bottom-12)<1,'narrow bottom');for(const button of bar.querySelectorAll('button')){const b=button.getBoundingClientRect();check(b.left>=0&&b.right<=innerWidth&&b.bottom<=innerHeight,'visible action');}check(document.documentElement.scrollWidth<=innerWidth+1,'narrow overflow');")

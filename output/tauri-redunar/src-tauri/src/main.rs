@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod activation;
 mod artwork;
 mod backend;
 mod background_start;
 mod catalog;
+mod clip_details;
 mod clip_export;
 mod clip_metadata;
 mod diagnostic_startup;
@@ -94,20 +96,13 @@ fn persist_window_state(window: &tauri::Window) {
     let _ = backend::service().set_window_state(width, height, maximized);
 }
 
-fn tauri_context(read_only_instance: bool, background: bool) -> tauri::Context<tauri::Wry> {
+fn tauri_context(background: bool) -> tauri::Context<tauri::Wry> {
     let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
     if background {
         if let Some(window) = context.config_mut().app.windows.first_mut() {
             window.visible = false;
             window.focus = false;
         }
-    }
-    if read_only_instance {
-        // A second GTK application with the primary app ID reactivates the
-        // first Tauri event loop. Tauri then runs setup twice and panics while
-        // recreating its `main` webview. Keep the same product identity but
-        // register only this read-only secondary as a non-unique GTK app.
-        context.config_mut().app.enable_gtk_app_id = false;
     }
     context
 }
@@ -179,12 +174,32 @@ fn main() {
         eprintln!("{message}");
         return;
     }
-    // Concurrent Steam starters must never create a secondary GTK app or
-    // compete with the existing native session owner.
-    if background && backend::other_owner() {
-        backend::shutdown();
-        return;
+    if backend::other_owner() {
+        if background {
+            backend::shutdown();
+            return;
+        }
+        if activation::request(&backend::service().desktop_activation_socket()).is_ok() {
+            backend::shutdown();
+            return;
+        }
+        // The owner may have crashed during handoff. Reacquire the kernel
+        // lease once; never create a second window while a live owner remains.
+        if !backend::retry_ownership().unwrap_or(false) {
+            eprintln!("Redunar is already running. If its window cannot be restored, restart the existing app.");
+            backend::shutdown();
+            return;
+        }
     }
+    let activation =
+        match activation::Activation::bind(backend::service().desktop_activation_socket()) {
+            Ok(activation) => activation,
+            Err(_) => {
+                eprintln!("Redunar could not safely prepare desktop activation.");
+                backend::shutdown();
+                return;
+            }
+        };
     #[cfg(target_os = "linux")]
     configure_webkit_renderer();
     // GTK 3 otherwise advertises the executable name ("redunar-tauri") as
@@ -254,6 +269,14 @@ fn main() {
             if let Err(error) = app.state::<hotkeys::ShortcutMonitor>().activate() {
                 redunar_daemon::log_op!("Redunar shortcuts unavailable: {error}");
             }
+            // Install handoff after hidden/background startup has settled so
+            // an early pending Open cannot be hidden again by prepare_window.
+            let owner = app.handle().clone();
+            activation.ready(move || {
+                let main = owner.clone();
+                let _ = owner.run_on_main_thread(move || tray::show_window(&main));
+            });
+            app.manage(activation);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -304,6 +327,10 @@ fn main() {
             runtime::replay_preferences,
             runtime::replay_display_capability,
             runtime::set_replay_save_parent,
+            runtime::pick_replay_folder,
+            runtime::microphone_inputs,
+            clip_details::rename_replay_clip,
+            clip_details::set_clip_details,
             runtime::set_replay_microphone,
             runtime::set_replay_overlay_behavior,
             runtime::set_replay_initial_save_duration,
@@ -346,7 +373,7 @@ fn main() {
             runtime::save_replay,
             runtime::delete_replay_clip,
         ])
-        .build(tauri_context(backend::other_owner(), background))
+        .build(tauri_context(background))
         .expect("Could not open Redunar");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
@@ -366,6 +393,7 @@ fn main() {
             }
         }
         if let tauri::RunEvent::Exit = event {
+            app.state::<activation::Activation>().shutdown();
             tray::shutdown(app);
             app.state::<sessions::Sessions>().shutdown();
             app.state::<clip_export::ClipExports>().shutdown();
@@ -387,16 +415,13 @@ mod identity_tests {
 
     #[test]
     fn runtime_identity_matches_the_tauri_identifier() {
-        let primary = super::tauri_context(false, false);
+        let primary = super::tauri_context(false);
         assert_eq!(primary.config().identifier, APP_ID);
         assert!(primary.config().app.enable_gtk_app_id);
         assert!(primary.config().app.windows[0].visible);
-        let background = super::tauri_context(false, true);
+        let background = super::tauri_context(true);
         assert!(!background.config().app.windows[0].visible);
         assert!(!background.config().app.windows[0].focus);
-        let secondary = super::tauri_context(true, false);
-        assert_eq!(secondary.config().identifier, APP_ID);
-        assert!(!secondary.config().app.enable_gtk_app_id);
     }
 
     #[cfg(target_os = "linux")]

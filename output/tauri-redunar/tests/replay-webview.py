@@ -22,7 +22,7 @@ gi.require_version("WebKit2", "4.1")
 from gi.repository import GLib, Gtk, WebKit2
 
 NATIVE = Path(__file__).resolve().parents[1]
-ARTIFACTS = NATIVE.parents[1] / "target/replay-ui-review"
+ARTIFACTS = NATIVE.parents[1] / ".redunar-build/reports/replay-ui"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         screenshot("replay-initial.png")
         js("""
         check(document.querySelectorAll('[data-clip]').length===24,'fixture loaded');
-        check(document.querySelector('#replay-phase').textContent.includes('OpenGL capture is unavailable for this game'),'native replay reason is visible');
+        check(document.querySelector('.capture-status-detail').textContent.includes('OpenGL capture is unavailable for this game'),'native replay reason is visible');
         window.rail=document.querySelector('.clip-list');
         check(rail.scrollWidth<=rail.clientWidth+1,'long filename does not overflow rail');
         check(getComputedStyle(document.querySelector('.clip-select strong')).whiteSpace==='normal','filenames wrap');
@@ -169,8 +169,8 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         pump(200)
         js("""
         window.search=document.querySelector('#clip-search');
-        search.value='Clip 1';search.dispatchEvent(new Event('input',{bubbles:true}));
-        check(document.querySelectorAll('[data-clip]').length===10,'filtered clips');
+        search.value='clip-1';search.dispatchEvent(new Event('input',{bubbles:true}));
+        check(document.querySelectorAll('[data-clip]').length===11,'filtered clips');
         document.querySelector('#save-duration').value='120';
         rail.scrollTop=500;window.railTop=rail.scrollTop;
         const card=document.querySelector('[data-clip="clip-15.mp4"]');
@@ -178,10 +178,10 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         check(document.querySelector('.clip-list')===rail,'selection retained rail');
         check(rail.scrollTop===railTop&&railTop>0,'selection retained rail scroll');
         check(document.activeElement===card,'selection retained focus');
-        check(search.value==='Clip 1','selection retained search');
+        check(search.value==='clip-1','selection retained search');
         check(document.querySelector('#save-duration').value==='120','selection retained save duration');
-        check(document.querySelector('.native-video-caption small').textContent==='clip-15.mp4','selected title');
-        check(document.querySelector('.native-video-caption small').textContent==='clip-15.mp4','filename caption');
+        check(document.querySelector('[data-selected-clip-title]').textContent==='clip-15.mp4','selected title');
+        check(document.querySelector('[data-selected-clip-title]').textContent==='clip-15.mp4','filename caption');
         check(document.querySelector('.native-video-caption strong').textContent==='Fixture game','recorded game label');
         window.selectedVideo=document.querySelector('#clip-video');
         window.beforeCalls=bridge.calls.length;
@@ -215,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         document.querySelector('[data-clip="clip-17.mp4"]').click();
         document.querySelector('[data-clip="clip-18.mp4"]').click();
         check(bridge.calls.join(',')==='clip-16.mp4','bounded preparation');
-        check(document.querySelector('.native-video-caption small').textContent==='clip-18.mp4','selection updates while native preparation pending');
+        check(document.querySelector('[data-selected-clip-title]').textContent==='clip-18.mp4','selection updates while native preparation pending');
         check(document.querySelector('#clip-play-toggle').disabled,'old media readiness cleared');
         bridge.pending.shift().resolve('/fixture.mp4?obsolete');
         """)
@@ -241,7 +241,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         const next=document.querySelector('[data-clip="clip-19.mp4"]');
         next.scrollIntoView({block:'center'});window.pageTop=workspaceScroll.scrollTop;
         next.click();
-        check(pageTop>0&&workspaceScroll.scrollTop===pageTop,'selection retained workspace scroll');
+        check(pageTop>0&&workspaceScroll.scrollTop===pageTop,'selection retained workspace scroll '+JSON.stringify({pageTop,after:workspaceScroll.scrollTop,height:workspaceScroll.scrollHeight,client:workspaceScroll.clientHeight,documentTop:scrollY}));
         """)
         pump(600)
         js("check(workspaceScroll.scrollTop===pageTop,'metadata retained workspace scroll');check(bridge.errors.length===0,bridge.errors.join(';'))")
@@ -266,7 +266,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         const before=document.querySelector('#clip-time').textContent;
         detachedVideo.dispatchEvent(new Event('seeked'));
         check(document.querySelector('#clip-time').textContent===before,'old media event ignored');
-        document.querySelector('#clip-search').value='Clip 1';
+        document.querySelector('#clip-search').value='clip-1';
         document.querySelector('#clip-search').dispatchEvent(new Event('input',{bubbles:true}));
         window.rail=document.querySelector('.clip-list');
         check(bridge.errors.length===0,bridge.errors.join(';'));
@@ -281,7 +281,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         const context=filmstrip.getContext('2d');
         const first=Array.from(context.getImageData(0,0,160,90).data);
         const last=Array.from(context.getImageData(1120,0,160,90).data);
-        check(first.some((channel,index)=>channel!==last[index]),'filmstrip samples different clip moments');
+        check(first.some((channel,index)=>channel!==last[index]),'filmstrip samples different clip moments '+JSON.stringify({first:first.slice(0,8),last:last.slice(0,8),sum:first.reduce((a,b)=>a+b,0),width:filmstrip.width,height:filmstrip.height}));
         check(document.querySelector('#clip-video').currentTime===0,'sampling did not seek player');
         const start=document.querySelector('#trim-start-bar'),end=document.querySelector('#trim-end-bar');
         start.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));
@@ -314,7 +314,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         check(!document.querySelector('#retry-clip').hidden,'media failure offers retry');
         check(document.querySelector('#clip-play-toggle').disabled,'failed player is disabled');
         check(!document.querySelector('#clip-video').hasAttribute('src'),'failed stream released');
-        document.querySelector('.media-load-status').scrollIntoView({block:'center'});
+        document.querySelector('#media-state-overlay').scrollIntoView({block:'center'});
         """)
         screenshot("replay-load-failure.png")
         js("""
@@ -322,7 +322,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         """)
         pump(100)
         js("""
-        check(document.querySelector('#media-note').textContent==='Fixture preparation failed','preparation failure shown');
+        check(document.querySelector('#media-state-detail').textContent==='Fixture preparation failed','preparation failure shown');
         check(!document.querySelector('#retry-clip').hidden,'preparation failure remains retryable');
         bridge.failPlayback=false;document.querySelector('#retry-clip').click();
         """)
@@ -343,7 +343,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("check(document.querySelectorAll('.export-summary .stat').length===3,'export summary has three columns');document.querySelector('#dialog [data-close]').click();const seek=document.querySelector('#player-seek');check(!seek.disabled,'seek enabled');seek.value='1';seek.dispatchEvent(new Event('input',{bubbles:true}));")
         pump(200)
         js("check(Math.abs(document.querySelector('#clip-video').currentTime-1)<.1,'precision seek reaches requested time')")
-        js("const selected=document.querySelector('[data-clip][aria-pressed=true]').dataset.clip;document.querySelector('[data-action=delete-selected-clip]').click();check(document.querySelector('#delete-clip-form [name=fileName]').value===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
+        js("const selected=document.querySelector('[data-selected-clip-title]').textContent;document.querySelector('[data-action=delete-selected-clip]').click();check(document.querySelector('#delete-clip-form [name=fileName]').value===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
         js("const resetStartHandle=document.querySelector('#trim-start-bar');resetStartHandle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));check(!document.querySelector('[data-action=reset-trim]').disabled,'trim reset available');document.querySelector('[data-action=reset-trim]').click();check(document.querySelector('#trim-start-value').textContent==='00:00.0','trim starts at zero after reset');check(document.querySelector('#clip-selected-duration').textContent==='00:03.0','reset retains entire recording');check(!document.querySelector('#center-play').hidden,'center play visible while paused');document.querySelector('#center-play').click();")
         pump(300)
         js("check(!document.querySelector('#clip-video').paused,'center play starts video');check(document.querySelector('#center-play').hidden,'center control leaves playing picture clear');document.querySelector('#clip-play-toggle').click();")
@@ -372,9 +372,9 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
                     js("scrollTo(0,150)")
                     screenshot(f'replay-aspect-{label}.png')
         window.resize(1400,1000);pump(200)
-        js("bridge.mediaPath='/ultrawide.mp4';scrollTo(0,100);window.aspectScroll=scrollY;window.aspectRail=document.querySelector('.clip-list');aspectRail.scrollTop=400;window.aspectRailTop=aspectRail.scrollTop;document.querySelector('[data-clip=\"clip-15.mp4\"]').focus({preventScroll:true});document.querySelector('[data-clip=\"clip-15.mp4\"]').click();")
+        js("bridge.mediaPath='/ultrawide.mp4';window.aspectViewport=document.querySelector('.window-content');aspectViewport.scrollTop=100;window.aspectScroll=aspectViewport.scrollTop;window.aspectRail=document.querySelector('.clip-list');aspectRail.scrollTop=400;window.aspectRailTop=aspectRail.scrollTop;document.querySelector('[data-clip=\"clip-15.mp4\"]').focus({preventScroll:true});document.querySelector('[data-clip=\"clip-15.mp4\"]').click();")
         pump(700)
-        js("check(scrollY===aspectScroll,'aspect change retains document scroll');check(document.querySelector('.clip-list')===aspectRail&&aspectRail.scrollTop===aspectRailTop,'aspect change retains rail scroll');check(bridge.errors.length===0,bridge.errors.join(';')); ")
+        js("check(aspectViewport.scrollTop===Math.min(aspectScroll,aspectViewport.scrollHeight-aspectViewport.clientHeight),'aspect change retains workspace scroll within available content');check(document.querySelector('.clip-list')===aspectRail&&aspectRail.scrollTop===aspectRailTop,'aspect change retains rail scroll');check(bridge.errors.length===0,bridge.errors.join(';')); ")
         print('PASS: WebKitGTK rail/document scroll, filter, focus, save duration, thumbnail updates, media readiness, unchanged control icons, rapid selection, eight real frame samples, keyboard trimming, and export boundaries.')
     finally:
         window.destroy()

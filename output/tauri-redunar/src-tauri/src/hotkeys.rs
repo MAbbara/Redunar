@@ -501,9 +501,18 @@ mod tests {
     fn optional_menu_and_save_assignments_do_not_emit_empty_bindings() {
         let mut preferences = redunar_daemon::ReplayPreferences::default();
         preferences.overlay_shortcut.clear();
+        preferences
+            .save_shortcuts
+            .push(redunar_daemon::ReplayShortcutBinding {
+                duration: redunar_core::ReplayDuration::Seconds30,
+                shortcut: "Alt+Z".into(),
+            });
         let mut protocol = Vec::new();
         write_bindings(&mut protocol, &preferences).unwrap();
-        assert_eq!(String::from_utf8(protocol).unwrap(), "BIND F8 30\nSTART\n");
+        assert_eq!(
+            String::from_utf8(protocol).unwrap(),
+            "BIND Alt+Z 30\nSTART\n"
+        );
         preferences.save_shortcuts.clear();
         let mut protocol = Vec::new();
         write_bindings(&mut protocol, &preferences).unwrap();
@@ -517,7 +526,7 @@ mod tests {
         write_bindings(&mut protocol, &preferences).expect("helper protocol");
         assert_eq!(
             String::from_utf8(protocol).expect("UTF-8 protocol"),
-            "TOGGLE Shift+Tab\nBIND F8 30\nSTART\n"
+            "TOGGLE Alt+Shift+Z\nSTART\n"
         );
     }
 

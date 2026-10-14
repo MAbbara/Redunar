@@ -59,6 +59,18 @@ impl ClipExports {
         }
     }
 
+    // Serialize mutations with export admission. An export owns its source
+    // filename until archive/commit finishes; playback owns an open descriptor.
+    pub fn with_idle<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let active = self.0.lock().map_err(|_| "Clip export is unavailable")?;
+        if active.is_some() {
+            return Err(
+                "Finish or cancel the export before changing the clip or replay folder".into(),
+            );
+        }
+        action()
+    }
+
     pub fn shutdown(&self) {
         if let Ok(active) = self.0.lock() {
             if let Some(export) = active.as_ref() {
@@ -118,9 +130,15 @@ pub async fn export_replay_clip(
 ) -> Result<ExportedClip, String> {
     crate::backend::ensure_write_access()?;
     let duration = validate_trim_range(start_seconds, end_seconds)?;
-    let opened = crate::media::open_inventory_clip(&file_name)?;
     let exports = exports.inner().clone();
     let (id, job) = exports.begin()?;
+    let opened = match crate::media::open_inventory_clip(&file_name) {
+        Ok(opened) => opened,
+        Err(error) => {
+            exports.finish(id);
+            return Err(error);
+        }
+    };
     let result = tauri::async_runtime::spawn_blocking(move || {
         export_clip(
             opened.file,
@@ -498,6 +516,32 @@ mod tests {
         assert!(job.cancelled.load(Ordering::Acquire));
         exports.finish(id);
         assert!(exports.begin().is_ok());
+    }
+
+    #[test]
+    fn mutations_wait_for_export_completion_and_failures_release_admission() {
+        let exports = ClipExports::default();
+        let (id, _) = exports.begin().expect("begin export");
+        let called = AtomicBool::new(false);
+        assert!(exports
+            .with_idle(|| {
+                called.store(true, Ordering::Release);
+                Ok(())
+            })
+            .is_err());
+        assert!(!called.load(Ordering::Acquire));
+        exports.finish(id);
+        assert!(exports
+            .with_idle(|| Err::<(), _>("Fixture mutation failed".into()))
+            .is_err());
+        let (next, _) = exports.begin().expect("failed mutation released admission");
+        exports.finish(id);
+        assert!(
+            exports.with_idle(|| Ok(())).is_err(),
+            "stale completion must not release a new export"
+        );
+        exports.finish(next);
+        assert!(exports.with_idle(|| Ok(())).is_ok());
     }
 
     #[test]

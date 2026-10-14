@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {storageSummary} from '../ui/workspace-improvements.mjs';
 import {mapGames,mapClips,mapSessions,measurement,overridePayload,mapDefaults,profilePayload,profileDraftChanged,shortcutDraftChanged,overrideDraftChanged,visibleSession} from '../ui/native-data.mjs';
 
 test('ended unlocked sessions are hidden from the live Overview while pending sessions remain visible',()=>{
@@ -76,7 +77,7 @@ test('Overview timeline shares the stable trace and baseline-anchored area treat
  assert.match(source,/overviewMetric==='fps'\?liveTimeline\.values\.map\(value=>1000\/value\):liveTimeline\.values/);
  assert.match(source,/aggregateTimelinePoints\(values\.map\(\(value,index\)=>\(\{x:index,value\}\)\)/);
  assert.match(source,/live\?'Older':'Sample 1'/);
- assert.match(source,/live\?'Now':`Sample \$\{values\.length\}`/);
+ assert.match(source,/live\?'Latest sample':`Sample \$\{values\.length\}`/);
  assert.match(source,/overview-area-gradient/);
  assert.match(source,/0,210 \$\{points\} 900,210/);
  assert.match(css,/\.overview-area\{fill:url\(#overview-area-gradient\)/);
@@ -286,15 +287,16 @@ test('Tauri replay settings do not expose a total storage quota',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
  const replaySettings=source.slice(source.indexOf('function globalReplay()'),source.indexOf('function frameRateControl()',source.indexOf('function globalReplay()')));
  assert.doesNotMatch(replaySettings,/Saved clip storage/);
- assert.match(source,/storageValue=unlimited\?/);
+ assert.doesNotMatch(replaySettings,/data-global=["']storage/);
+ assert.doesNotMatch(storageSummary({used_bytes:29.8e6,storage_limit_bytes:null}),/recording limit/);
 });
 test('Replay storage usage uses human-readable units without the verbose safety note',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');
- assert.match(source,/function formatStorageBytes\(bytes\)/);
- assert.match(source,/formatStorageBytes\(usedBytes\)/);
+ const html=storageSummary({used_bytes:29.8e6,available_bytes:137.4e9,total_bytes:512e9});
+ assert.match(html,/Recordings.*29.8 MB/);
+ assert.match(html,/137.4 GB <small>free/);
  assert.doesNotMatch(source,/Saves stop when the filesystem safety reserve would be crossed/);
- const css=readFileSync(new URL('../ui/native.css',import.meta.url),'utf8');
- assert.match(css,/\.storage-meter>div\{font-size:14px/);
+ assert.doesNotMatch(html,/Saves stop when the filesystem safety reserve would be crossed/);
 });
 test('Discovery hides Redunar entries and disables games already in the catalog',()=>{
  const source=readFileSync(new URL('../ui/app.js',import.meta.url),'utf8');

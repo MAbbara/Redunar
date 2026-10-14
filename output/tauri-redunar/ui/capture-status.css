@@ -1,0 +1,19 @@
+/* Shared Replay readiness presentation, including Overview and failure states. */
+.capture-summary, .replay-capture-bar .capture-summary { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.capture-summary .capture-status-symbol { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #383838; border-radius: 8px; background: #191919; color: #aaa; }
+.capture-status-symbol svg { width: 20px; height: 20px; }
+.capture-summary .capture-status-content { display: block; min-width: 0; }
+.capture-summary .capture-status-heading { display: block; font-size: 13px; line-height: 20px; font-weight: 500; color: #e6e6e6; }
+.capture-summary .capture-status-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 3px; font-size: 11px; line-height: 18px; }
+.capture-status-meta > span + span { border-left: 1px solid #383838; padding-left: 12px; }
+.capture-summary .capture-status-detail { margin: 4px 0 0; max-width: 72ch; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; color: #aaa; }
+.capture-summary .capture-summary-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: end; gap: 12px 20px; margin-left: 16px; font-size: 11px; }
+.capture-summary[data-state=ready] .capture-status-symbol { color: #a5ccb7; background: #12231b; border-color: #294333; }
+.capture-summary[data-state=error] .capture-status-symbol { color: #f1979c; background: #2b181b; border-color: #74363e; }
+.capture-summary[data-state=error] .capture-status-detail { color: #e2afb3; }
+.capture-summary[data-state=error] { border-color: #603039; }
+.replay-capture-bar:has(.capture-summary[data-state=error]) { border-color: #603039; }
+@media (max-width: 900px) {
+ .capture-summary, .replay-capture-bar .capture-summary { grid-template-columns: 32px minmax(0, 1fr); align-items: start; }
+ .capture-summary .capture-summary-actions { grid-column: 2; justify-content: start; margin: 4px 0 0; }
+}

@@ -1,0 +1,30 @@
+.sidebar-toggle { display: flex; align-items: center; gap: 12px; min-height: 38px; width: 100%; padding: 7px 0; margin-bottom: 10px; border: 0; background: transparent; color: var(--muted); text-align: left; font-size: 11px; cursor: pointer; }
+.sidebar-toggle:hover { color: var(--text); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; border-radius: 4px; }
+.sidebar-collapse-icon { width: 20px; height: 20px; flex: none; }
+html[data-sidebar=collapsed] .sidebar { width: 64px; }
+html[data-sidebar=collapsed] .app-shell { margin-left: 64px; }
+html[data-sidebar=collapsed] .sidebar .brand { padding: 25px 16px; width: auto; margin: 0; }
+html[data-sidebar=collapsed] .sidebar .brand-mark { display: block; width: 30px; height: 30px; }
+html[data-sidebar=collapsed] .sidebar .brand-copy { display: none; }
+html[data-sidebar=collapsed] .sidebar nav { display: grid; gap: 7px; width: 100%; padding: 0 8px; }
+html[data-sidebar=collapsed] .sidebar .nav-link { min-width: 0; padding: 0; justify-content: center; }
+html[data-sidebar=collapsed] .sidebar .nav-link span { display: none; }
+html[data-sidebar=collapsed] .sidebar .nav-link.active::before { left: -8px; }
+html[data-sidebar=collapsed] .sidebar .sidebar-bottom { padding: 20px 16px; width: auto; }
+html[data-sidebar=collapsed] .sidebar .sidebar-toggle { justify-content: center; }
+html[data-sidebar=collapsed] .sidebar .sidebar-toggle span,
+html[data-sidebar=collapsed] .sidebar .settings-link span,
+html[data-sidebar=collapsed] .sidebar .build-label { display: none; }
+html[data-sidebar=collapsed] .sidebar .settings-link { justify-content: center; }
+html[data-sidebar=collapsed] .sidebar-collapse-icon { transform: rotate(180deg); }
+/* Compact layouts already show icons, so an expansion control would be misleading. */
+@media (max-width: 700px) { .sidebar-toggle { display: none; } }
+@media (min-width: 701px) {
+  html[data-sidebar=expanded] .sidebar .brand { justify-content: center; }
+  html[data-sidebar=expanded] .sidebar .brand-mark { display: none; }
+}
+
+.library-heading-actions .button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 9px 16px; line-height: 20px; text-align: center; }
+.library-heading-actions .button > span { display: block; line-height: 20px; }
+.library-heading-actions .button .icon { flex: none; width: 18px; height: 18px; }

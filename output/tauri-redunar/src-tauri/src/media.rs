@@ -18,6 +18,7 @@ pub struct Clip {
     /// Game that recorded the clip, when local evidence resolves it. The UI
     /// falls back to "Game not recorded" only when this is null.
     game_name: Option<String>,
+    favorite: bool,
 }
 #[tauri::command]
 pub fn replay_clips() -> Result<Vec<Clip>, String> {
@@ -42,6 +43,7 @@ pub fn replay_clips() -> Result<Vec<Clip>, String> {
             bytes: clip.bytes,
             modified_unix_ns: clip.modified_unix_ns.to_string(),
             game_name: clip.game_name,
+            favorite: clip.favorite,
         })
         .collect())
 }

@@ -65,8 +65,10 @@ reserve and must not erase other recordings to make room.
 
 ## Shortcuts and menus
 
-Fresh preferences assign **Shift+Tab** to the replay menu and **F8** to saving
-30 seconds. Other duration bindings start empty. These are Redunar defaults,
+Fresh preferences assign **Alt+Shift+Z** to opening the replay menu. All direct
+save bindings start empty; the menu initially selects 30 seconds. Existing saved
+bindings, including cleared shortcuts, are preserved. Versions 1–3 retain their
+historical Shift+Tab menu binding when migrating. These are Redunar defaults,
 not desktop bindings or a guarantee against another application's hotkey clash.
 
 The menu and up to eight save bindings are optional. Save-only, menu-only, and
@@ -401,3 +403,34 @@ installed-component verification, and owner-controlled game acceptance. Fixture
 encode success does not prove real-game frame pacing or cross-distribution
 playback. Preserve original files during diagnostics; copies belong in isolated
 state. Retired toggles and obsolete readiness behavior must not be reintroduced.
+
+## Recording filenames, favorites and capacity
+
+The replay browser displays actual filenames. Edit filename exposes only the
+stem and retains the original extension. The native service/store accepts only
+owned inventory entries, uses an atomic no-overwrite rename and preserves game
+attribution and favorite state. Active exports serialize against renaming;
+playback retains its open descriptor. Collisions, traversal, hidden/control names,
+symlinks, hardlinks and replaced renamed files are rejected.
+
+A bounded private `.redunar-clip-labels-v1` ledger in the owned replay directory
+records device/inode, original generated filename and favorite state. Destination
+identity is durably staged before rename, so interrupted operations leave either
+name discoverable. Failed precommit metadata writes leave the recording untouched.
+The inventory still excludes arbitrary videos; only explicitly registered renamed
+identities supplement the original generated-name reader. Old files need no rewrite.
+This ledger is an ownership reader and must remain until all renamed recordings
+have been migrated; older Redunar versions will not list renamed files.
+
+The Replay drive panel distinguishes total filesystem usage/free capacity from
+recordings' size. Missing capacity omits the meter; low space suggests explicit
+review in the clip folder, with no automatic cleanup added. Capacity uses the
+nearest existing destination parent before the first recording creates the store.
+Use default folder restores Videos/Redunar Replays (state-directory fallback when
+HOME is unavailable), and never moves existing recordings.
+
+The folder picker selects a parent only; service validation still owns the fixed
+Redunar Replays child. Input enumeration uses bounded PipeWire/Pulse discovery,
+excludes output monitors, reports unavailable inputs and preserves an unplugged
+saved selection. Input selection applies to the next launch and remains locked
+through launch, recording and teardown, as described in Audio behavior.
