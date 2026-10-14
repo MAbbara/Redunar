@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.23" date="2026-10-14">
+      <description>
+        <p>Aligns microphone input controls, clarifies disabled selection, and uses generic Replay launch guidance on Overview and Instant Replay.</p>
+      </description>
+    </release>
     <release version="0.1.22" date="2026-10-14">
       <description>
         <p>Updates the workspace, clip management, and capture controls; reopens the existing Redunar window on repeated launches; and fixes clip previews and Steam library import feedback.</p>

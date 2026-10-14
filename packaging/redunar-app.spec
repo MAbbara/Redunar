@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.22
+Version:        0.1.23
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later
@@ -99,6 +99,10 @@ fi
 %license /usr/share/licenses/redunar/COPYRIGHT
 
 %changelog
+* Wed Oct 14 2026 Redunar <local@redunar.invalid> - 0.1.23-1.local
+- Align microphone input controls and clarify disabled selection.
+- Use generic Replay launch guidance on Overview and Instant Replay.
+
 * Wed Oct 14 2026 Redunar <local@redunar.invalid> - 0.1.22-1.local
 - Update the workspace, clip management, and capture controls.
 - Reopen the existing Redunar window on repeated launches.

@@ -132,6 +132,13 @@ configuration and the global microphone toggle are locked through launch,
 recording and teardown; this must not block an
 otherwise valid visibility-only save. Microphone help states that changes apply
 to the next game launch, and failed writes restore the saved toggle value.
+Shared inactive Replay guidance says “Launch a supported game to build a local
+buffer.” on Overview and Instant Replay; it does not restrict the launcher.
+Refresh inputs followed by Microphone input form one control group aligned at the
+right of a wide settings row, below its label on narrow screens. Refresh inputs
+uses a neutral secondary button. With Microphone off, explain how to enable
+input selection; during a game, explain the session lock. Discovery errors and
+missing-input feedback occupy a separate full-width line.
 The Replay panel retains the recording-folder control and its resolved path.
 The MKV/MP4 save container may change
 during a session and applies to future saves. Menu/save shortcuts may all be

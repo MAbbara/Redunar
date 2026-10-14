@@ -1176,3 +1176,15 @@ and targeted Vulkan/session/replay runners. Do not run a blanket `--ignored`
 test suite: select explicit hardware tests and understand their effects.
 
 Old recipes and dated results are not part of the active Tauri release checklist.
+
+### Microphone input layout — October 14, 2026
+
+Working-tree build on `fix/microphone-input-layout`, based on `f1a66a8`:
+production frontend build and 96 Node tests passed. The isolated WebKitGTK
+workspace passed 147 checks, including a 2034 px wide microphone control group,
+640 px wrapping, neutral Refresh inputs styling, the disabled-state explanation,
+keyboard selection, saved-input preservation on failed writes, and full-width
+discovery errors with retry. Wide and narrow screenshots were visually inspected.
+Logs and screenshots are checkout-local under `.redunar-build/reports/`.
+This is frontend fixture evidence; no package was installed, live microphone
+capture was exercised, or hardware-support claim added.
