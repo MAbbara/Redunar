@@ -84,6 +84,16 @@ Background startup also locates the matching helper beside a local build or in
 an unpacked package's sibling `libexec` directory; it does not need inherited
 game environment overrides. This lookup does not grant input-device access.
 
+Keyboard discovery retries once per second while the helper is running, including
+when no keyboard is readable at startup. A reconnect replaces the old input
+handle even if Linux reuses its event path. Device loss clears that device's
+held-key state and closes an open Replay menu to release pointer control.
+When no readable keyboard remains, activation reports Unavailable and waits for
+access to return; it becomes Active automatically after a successful open.
+A mouse dongle may expose a valid keyboard interface, so Active means at least
+one readable keyboard interface, not proof that every attached keyboard is
+monitored. Saved shortcuts and unsaved UI drafts are unchanged by rediscovery.
+
 The shortcut opens the Replay menu inside the captured game: the active Vulkan
 or OpenGL capture backend renders the panel into the game's own presentation
 target, so compositor stacking rules and fullscreen focus games cannot hide it

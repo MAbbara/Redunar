@@ -74,6 +74,29 @@ live-game capture. Those remain separately authorized acceptance. Current run
 results and exact source manifests are kept under `.redunar-build/reports`;
 production build source/binary manifests belong to `.redunar-build/linux`.
 
+## Keyboard reconnect fixtures
+
+Private byte-stream fixtures exercise the production keyboard owner with empty
+or denied discovery, access recovery/loss, same-path inode replacement, failed
+reads, EOF, dropped evdev synchronization and bounded handle counts. They check
+that superseded handles close and replacements receive new generations. Private
+control sockets drive the production shortcut monitor through stale modifiers,
+composite duplicate presses, one replacement save and menu close on input loss.
+A full-queue shutdown fixture confirms supervisor join without real input devices.
+Native Tauri tests check Unavailable/Active recovery without webview reads;
+the production WebKit fixture checks waiting feedback and preserved shortcut
+drafts without writes or Retry activation.
+
+```sh
+cargo test --locked --offline -p redunar-hotkeys --target-dir .redunar-build/checks/root
+tools/validate.sh full
+xvfb-run -a python3 output/tauri-redunar/tests/workspace-webview.py
+```
+
+These fixtures do not qualify live USB reconnects or installed app behavior.
+See the [October 14 verification](docs/verification/2026-10-14-keyboard-reconnect.md)
+for the validated source manifest, local package and remaining acceptance.
+
 ## Replay menu pointer fixtures
 
 The shortcut helper's fake mouse fixtures cover queued gameplay clicks/motion

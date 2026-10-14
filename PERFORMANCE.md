@@ -36,6 +36,14 @@ Record process scope, host, driver, build, workload, duration, and method.
 - Keep catalog/artwork/media discovery outside monitor ticks and frame callbacks.
   Bound file sizes, records, parsed arguments, worker counts, and queues.
 
+The shortcut helper has one keyboard supervisor and one stdin watcher, with a
+128-item event queue. Every 8 ms it reads at most 32 input events from each of at
+most 16 nonblocking keyboard handles. Keyboard discovery runs once per second
+and inspects at most 64 entries in each of two input-link directories. It emits
+availability only when the readable-device count changes. Shutdown drops the
+queue before joining the supervisor so a full queue cannot strand cleanup.
+These bounds are not a measured live-game CPU qualification.
+
 ## Replay bounds
 
 Vulkan device-extension discovery allocates at most 1,024 fixed 260-byte records

@@ -60,6 +60,7 @@ impl Default for ShortcutMonitor {
 #[derive(Debug, Eq, PartialEq)]
 enum HelperEvent {
     Ready,
+    KeyboardUnavailable,
     MenuOpened,
     MenuOpenedWithoutPointer,
     MenuClosed,
@@ -255,6 +256,15 @@ fn drain_events(state: &mut State, app_handle: Option<&tauri::AppHandle>) {
                 state.state = "Active".into();
                 state.message = None;
             }
+            HelperEvent::KeyboardUnavailable => {
+                // Keep the helper alive: device/ACL discovery retries natively,
+                // including while the webview is hidden.
+                state.state = "Unavailable".into();
+                state.message = Some(
+                    "No readable keyboard input device. Waiting for keyboard access to return."
+                        .into(),
+                );
+            }
             HelperEvent::MenuOpened => {
                 // The helper owns the whole in-game menu session: it toggles
                 // the daemon state, captures mice, and streams pointer events.
@@ -378,6 +388,8 @@ fn parse_helper_event(line: String, errors: bool) -> HelperEvent {
         HelperEvent::Error(line)
     } else if line.starts_with("READY ") {
         HelperEvent::Ready
+    } else if line == "WAITING KEYBOARD" {
+        HelperEvent::KeyboardUnavailable
     } else if line == "MENU OPENED" {
         HelperEvent::MenuOpened
     } else if line == "MENU OPENED VIEW ONLY" {
@@ -473,6 +485,24 @@ mod tests {
             status.message.as_deref(),
             Some("No readable keyboard input device")
         );
+    }
+
+    #[test]
+    fn keyboard_loss_and_recovery_update_status_without_webview_polling() {
+        let monitor = ShortcutMonitor::default();
+        let (sender, events) = std::sync::mpsc::sync_channel(32);
+        super::lock(&monitor.state).events = Some(events);
+        for (line, expected) in [
+            ("READY 2", "Active"),
+            ("WAITING KEYBOARD", "Unavailable"),
+            ("READY 1", "Active"),
+        ] {
+            sender.send(parse_helper_event(line.into(), false)).unwrap();
+            monitor.dispatch();
+            let status = monitor.snapshot();
+            assert_eq!(status.state, expected);
+            assert_eq!(status.message.is_some(), expected == "Unavailable");
+        }
     }
 
     #[test]

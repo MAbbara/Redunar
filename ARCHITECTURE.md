@@ -366,7 +366,13 @@ The active Tauri replay shortcut toggles the in-game Replay menu through the
 daemon's replay control socket. The active Vulkan or OpenGL capture backend
 renders the panel into the game's own presentation target, and the
 hotkey helper grabs the mice and streams pointer events while it is open; no
-desktop menu webview exists. If the session exposes readable keyboard devices
+desktop menu webview exists. A single nonblocking keyboard supervisor owns at most
+16 input handles, reads at most 32 events per device per tick, and checks bounded
+input links once per second. Handles carry filesystem identity and unique
+generations; loss/replacement retires held keys and closes any owned menu before
+new input is handled. Native availability events preserve automatic recovery
+without webview polling or preference writes. If the session exposes readable
+keyboard devices
 but no readable mouse event device, the helper still opens the in-game panel in
 view-only mode and reports the missing pointer capability to Tauri. The app does
 not expose a desktop preview of this game-rendered menu. The versioned menu
