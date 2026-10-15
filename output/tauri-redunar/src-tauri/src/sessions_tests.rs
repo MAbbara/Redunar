@@ -912,3 +912,20 @@ fn external_process_identity_rejects_reused_pid_and_treats_disappearance_as_exit
         CaptureLaunchProcessState::Exited(_)
     ));
 }
+
+#[test]
+fn update_restart_claim_is_serialized_with_launch_and_blocks_new_sessions() {
+    let mut f = Fixture::new();
+    f.engine.start(f.plan("/bin/sleep", &["30"])).unwrap();
+    assert!(f.engine.claim_update_restart().is_err());
+    assert!(!f.engine.shutdown);
+    if let LaunchProcess::Child(child) = &mut f.engine.active.as_mut().unwrap().child {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    f.engine.tick(&MonitorSnapshot::default());
+    assert!(f.engine.active.is_none());
+    f.engine.claim_update_restart().unwrap();
+    assert!(f.engine.shutdown);
+    assert!(f.engine.start(f.plan("/bin/true", &[])).is_err());
+}

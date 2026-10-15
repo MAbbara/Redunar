@@ -718,6 +718,22 @@ fn reconcile_pending_update(current_version: &str) -> Option<UpdateCheckStatus> 
     })
 }
 
+/// Local confirmation only; restarting never triggers a download or installer.
+pub(crate) fn ensure_restart_ready() -> Result<(), String> {
+    let _operation = UPDATE_OPERATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let status = reconcile_pending_update(env!("CARGO_PKG_VERSION"));
+    if status.is_some_and(|value| value.state == "restart-needed") {
+        Ok(())
+    } else {
+        Err(
+            "A newer installed Redunar package has not been confirmed. Check for updates again."
+                .into(),
+        )
+    }
+}
+
 fn installed_version_at_least(pending: &PendingUpdate) -> bool {
     package_version_at_least(pending, installed_package_version(&pending.kind).as_deref())
 }

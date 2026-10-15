@@ -20,6 +20,7 @@ mod session_lifecycle;
 mod sessions;
 mod tray;
 mod tray_native;
+mod update_restart;
 mod updates;
 mod window_lifecycle;
 use tauri::Manager;
@@ -324,12 +325,16 @@ fn main() {
             runtime::set_automatic_updates,
             runtime::check_for_updates,
             runtime::install_update,
+            update_restart::restart_redunar,
             runtime::replay_preferences,
             runtime::replay_display_capability,
             runtime::set_replay_save_parent,
             runtime::pick_replay_folder,
             runtime::microphone_inputs,
             clip_details::rename_replay_clip,
+            clip_details::trashed_replay_clips,
+            clip_details::move_replay_clips_to_trash,
+            clip_details::restore_replay_clips,
             clip_details::set_clip_details,
             runtime::set_replay_microphone,
             runtime::set_replay_overlay_behavior,
@@ -373,6 +378,7 @@ fn main() {
             runtime::save_replay,
             runtime::delete_replay_clip,
         ])
+        .manage(update_restart::UpdateRestart::default())
         .build(tauri_context(background))
         .expect("Could not open Redunar");
     app.run(|app, event| {
@@ -380,6 +386,8 @@ fn main() {
             // Keep the app visible if session cleanup needs user attention.
             if let Err(error) = app.state::<sessions::Sessions>().end_for_exit() {
                 api.prevent_exit();
+                app.state::<update_restart::UpdateRestart>().cancel();
+                app.state::<clip_export::ClipExports>().cancel_restart();
                 tray::show_window(app);
                 if let Some(window) = app.get_webview_window("main") {
                     let message = serde_json::to_string(&format!(
@@ -405,6 +413,7 @@ fn main() {
             }
             redunar_daemon::diagnostic_log::log("app event=shutdown_complete");
             redunar_daemon::diagnostic_log::shutdown();
+            app.state::<update_restart::UpdateRestart>().finish();
         }
     });
 }

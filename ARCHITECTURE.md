@@ -366,7 +366,13 @@ The active Tauri replay shortcut toggles the in-game Replay menu through the
 daemon's replay control socket. The active Vulkan or OpenGL capture backend
 renders the panel into the game's own presentation target, and the
 hotkey helper grabs the mice and streams pointer events while it is open; no
-desktop menu webview exists. If the session exposes readable keyboard devices
+desktop menu webview exists. A single nonblocking keyboard supervisor owns at most
+16 input handles, reads at most 32 events per device per tick, and checks bounded
+input links once per second. Handles carry filesystem identity and unique
+generations; loss/replacement retires held keys and closes any owned menu before
+new input is handled. Native availability events preserve automatic recovery
+without webview polling or preference writes. If the session exposes readable
+keyboard devices
 but no readable mouse event device, the helper still opens the in-game panel in
 view-only mode and reports the missing pointer capability to Tauri. The app does
 not expose a desktop preview of this game-rendered menu. The versioned menu
@@ -439,3 +445,21 @@ admission in `clip_export.rs`. The webview cannot rename arbitrary paths. See
 [REPLAY.md](REPLAY.md#recording-filenames-favorites-and-capacity) for persistence
 and compatibility obligations. Microphone input enumeration is owned by the audio
 library, exposed read-only through the service/runtime command.
+
+## Workspace refinement ownership
+
+`replay_store/trash.rs` owns the separate inode-bound logical trash ledger and
+bounded restoration; media remains in the same owned directory. `named_export.rs`
+commits named MP4s with pre-staged inode authorization and atomic no-replace rename.
+`clip_details.rs` exposes exact one-clip trash/restore commands through the service,
+serialized with `ClipExports` admission. `replay_runtime.rs` tracks microphone
+packet freshness; `runtime.rs` publishes it without device discovery.
+
+`update_restart.rs` permits restart only after local package reconciliation confirms
+a newer installed version, the fixed root-owned installed executable is safe, and
+session/export owners have atomically claimed shutdown. An ordinary Exit request
+retains cleanup vetoes. The native Exit path joins session, shortcut, playback and
+monitor workers, closes activation/tray resources and logging, then execs the
+installed executable without background startup arguments. Exec releases remaining
+close-on-exec service lease descriptors before the replacement backend starts.
+The webview never selects the executable or supplies restart arguments.

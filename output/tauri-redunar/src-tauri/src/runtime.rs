@@ -62,6 +62,7 @@ pub struct ReplayRuntimeDto {
     audio_packet_count: u64,
     audio_byte_count: u64,
     audio_active: bool,
+    microphone_state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +177,7 @@ pub fn replay_runtime_status() -> Result<ReplayRuntimeDto, String> {
         audio_packet_count: status.audio_packet_count,
         audio_byte_count: status.audio_byte_count,
         audio_active: status.audio_active,
+        microphone_state: coordinator.replay_runtime().microphone_state().into(),
     })
 }
 

@@ -32,6 +32,8 @@ struct ProductionAudioState {
     last_progress: Option<Instant>,
     microphone_buffer: ReplayAudioBuffer,
     microphone_recording: bool,
+    microphone_started: Option<Instant>,
+    microphone_progress: Option<Instant>,
 }
 
 struct RuntimeState {
@@ -88,6 +90,8 @@ impl ProductionReplayRuntime {
                     redunar_capture_audio::OpusStreamDescription::default(),
                 ),
                 microphone_recording: false,
+                microphone_started: None,
+                microphone_progress: None,
             })),
             inner: Arc::new(Mutex::new(RuntimeState {
                 status: ReplayRuntimeStatus::unavailable(settings),
@@ -242,6 +246,7 @@ impl ProductionReplayRuntime {
         audio.buffer.clear();
         audio.microphone_buffer.clear();
         audio.last_progress = None;
+        audio.microphone_progress = None;
         audio.recording = true;
         state.pipeline = Some(pipeline);
         Ok(())
@@ -317,11 +322,26 @@ impl ProductionReplayRuntime {
         audio
             .microphone_buffer
             .push(packet)
-            .map_err(|error| ReplayRuntimeError::new(error.to_string()))
+            .map_err(|error| ReplayRuntimeError::new(error.to_string()))?;
+        audio.microphone_progress = Some(Instant::now());
+        Ok(())
     }
 
     pub(crate) fn enable_microphone_recording(&self) {
-        lock_unpoisoned(&self.audio).microphone_recording = true;
+        let mut audio = lock_unpoisoned(&self.audio);
+        audio.microphone_recording = true;
+        audio.microphone_started = Some(Instant::now());
+    }
+
+    /// Cached packet freshness only: no device discovery or preference I/O.
+    #[must_use]
+    pub fn microphone_state(&self) -> &'static str {
+        let audio = lock_unpoisoned(&self.audio);
+        microphone_state(
+            audio.recording && audio.microphone_recording,
+            audio.microphone_started.map(|time| time.elapsed()),
+            audio.microphone_progress.map(|time| time.elapsed()),
+        )
     }
 
     /// Replace the active encoder after the capture source changes size.
@@ -358,6 +378,7 @@ impl ProductionReplayRuntime {
         audio.buffer.clear();
         audio.microphone_buffer.clear();
         audio.last_progress = None;
+        audio.microphone_progress = None;
         Ok(())
     }
 
@@ -639,6 +660,22 @@ fn mark_failed(
     state.status.last_failure = Some(failure);
 }
 
+fn microphone_state(
+    enabled: bool,
+    started: Option<Duration>,
+    progress: Option<Duration>,
+) -> &'static str {
+    if !enabled {
+        "off"
+    } else if progress.is_some_and(|elapsed| elapsed <= AUDIO_STALL_TIMEOUT) {
+        "active"
+    } else if progress.is_none() && started.is_some_and(|elapsed| elapsed <= AUDIO_STALL_TIMEOUT) {
+        "waiting"
+    } else {
+        "unavailable"
+    }
+}
+
 fn enqueue_completed(
     state: &mut RuntimeState,
     completed: Vec<u64>,
@@ -716,6 +753,7 @@ mod tests {
             let mut audio = lock_unpoisoned(&runtime.audio);
             audio.buffer.clear();
             audio.last_progress = None;
+            audio.microphone_progress = None;
         }
         assert!(!runtime.status().audio_active);
         runtime.submit_audio(packet(0)).unwrap();
@@ -803,5 +841,28 @@ mod tests {
             ReplayPhase::Inactive,
             Some(Duration::ZERO)
         ));
+    }
+}
+
+#[cfg(test)]
+mod microphone_status_tests {
+    use super::*;
+    #[test]
+    fn microphone_status_requires_packets_and_expires_without_affecting_video() {
+        assert_eq!(microphone_state(false, None, None), "off");
+        assert_eq!(
+            microphone_state(true, Some(Duration::ZERO), None),
+            "waiting"
+        );
+        assert_eq!(
+            microphone_state(true, Some(Duration::from_secs(4)), None),
+            "unavailable"
+        );
+        assert_eq!(microphone_state(true, None, Some(Duration::ZERO)), "active");
+        assert_eq!(
+            microphone_state(true, None, Some(Duration::from_secs(4))),
+            "unavailable"
+        );
+        assert_eq!(microphone_state(false, None, Some(Duration::ZERO)), "off");
     }
 }

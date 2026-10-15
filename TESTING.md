@@ -74,6 +74,29 @@ live-game capture. Those remain separately authorized acceptance. Current run
 results and exact source manifests are kept under `.redunar-build/reports`;
 production build source/binary manifests belong to `.redunar-build/linux`.
 
+## Keyboard reconnect fixtures
+
+Private byte-stream fixtures exercise the production keyboard owner with empty
+or denied discovery, access recovery/loss, same-path inode replacement, failed
+reads, EOF, dropped evdev synchronization and bounded handle counts. They check
+that superseded handles close and replacements receive new generations. Private
+control sockets drive the production shortcut monitor through stale modifiers,
+composite duplicate presses, one replacement save and menu close on input loss.
+A full-queue shutdown fixture confirms supervisor join without real input devices.
+Native Tauri tests check Unavailable/Active recovery without webview reads;
+the production WebKit fixture checks waiting feedback and preserved shortcut
+drafts without writes or Retry activation.
+
+```sh
+cargo test --locked --offline -p redunar-hotkeys --target-dir .redunar-build/checks/root
+tools/validate.sh full
+xvfb-run -a python3 output/tauri-redunar/tests/workspace-webview.py
+```
+
+These fixtures do not qualify live USB reconnects or installed app behavior.
+See the [October 14 verification](docs/verification/2026-10-14-keyboard-reconnect.md)
+for the validated source manifest, local package and remaining acceptance.
+
 ## Replay menu pointer fixtures
 
 The shortcut helper's fake mouse fixtures cover queued gameplay clicks/motion
@@ -1078,7 +1101,7 @@ regressions, and matching build checks; it adds no NVIDIA hardware qualification
 
 This is an explicit human hardware test, outside ordinary automated validation.
 The official package includes the Beta access switch. Install the exact approved
-candidate, enable **Beta access** and separately **Debug log**, fully quit and
+candidate, choose **Feature access → Beta** and separately enable **Debug log**, fully quit and
 restart Redunar, then launch a new session. Check that Settings says logging is
 active. A checked saved preference alone does not confirm that the log opened.
 
@@ -1188,3 +1211,15 @@ discovery errors with retry. Wide and narrow screenshots were visually inspected
 Logs and screenshots are checkout-local under `.redunar-build/reports/`.
 This is frontend fixture evidence; no package was installed, live microphone
 capture was exercised, or hardware-support claim added.
+
+## Workspace refinements — October 15, 2026
+
+Candidate v0.1.24 integrates `fix/keyboard-reconnect` with the accepted workspace
+preview. Run full validation and both production WebKit fixtures above, plus
+`tests/refinements-webview.py` in the Tauri directory. Store/service regressions
+cover persistent trash/restore, idempotency, metadata failures, inode replacements,
+secondary ownership and exclusive named exports. Runtime fixtures cover microphone
+packet freshness; native restart admission covers session/export races and failures.
+All ordinary checks use private state and fake hardware. Existing-window activation,
+installed upgrade, live microphone/keyboard reconnection and real-game capture
+remain separate acceptance; never substitute fixture evidence for them.

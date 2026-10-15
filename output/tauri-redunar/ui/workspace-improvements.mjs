@@ -1,3 +1,4 @@
+import { recordingAudio } from './workspace-state.mjs';
 import { replayStatusCopy } from './replay-menu-view.mjs';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -14,7 +15,7 @@ export function captureSummary(runtime) {
   const recording = copy.statusClass!=='error'&&['Buffering','Saving'].includes(runtime?.phase);
   const shapes={ready:'<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',pending:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',error:'<path d="m12 3 10 18H2Z"/><path d="M12 9v5m0 3v.01"/>'};
   const buffer=Number(runtime?.buffered_seconds);
-  const meta=ready?`${Number.isFinite(buffer)&&buffer>=0?`<span>${buffer.toFixed(0)} seconds buffered</span>`:''}${recording?`<span>${runtime.audio_active?'System audio active':'Waiting for system audio'}</span>`:''}`:'';
+  const meta=ready?`${Number.isFinite(buffer)&&buffer>=0?`<span>${buffer.toFixed(0)} seconds buffered</span>`:''}${recording?`${recordingAudio(runtime)}`:''}`:'';
   return `<div class="capture-summary" data-state="${copy.statusClass}" ${copy.statusClass==='error'?'role="alert"':''}><div class="capture-status-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${shapes[copy.statusClass]}</svg></div><div class="capture-status-content"><strong class="capture-status-heading">${escape(copy.title)}</strong>${meta?`<div class="capture-status-meta">${meta}</div>`:''}${!ready&&copy.detail?`<p class="capture-status-detail">${escape(copy.detail)}</p>`:''}</div></div>`;
 }
 const validBytes = value => Number.isFinite(value) && value >= 0;
@@ -39,8 +40,7 @@ export function clipFiltersMarkup(clips, filters) {
   const games=[...new Set(clips.map(c=>c.game_name).filter(Boolean))].sort();
   const options=(entries,value)=>entries.map(([key,label])=>`<option value="${escape(key)}" ${value===key?'selected':''}>${escape(label)}</option>`).join('');
   const active=Number(filters.game!=='all')+Number(filters.date!=='all');
-  const count=filterClips(clips,filters).length;
-  return `<div class="clip-collection" role="group" aria-label="Clip collection"><button type="button" data-clip-scope="all" aria-pressed="${!filters.favorites}">All clips</button><button type="button" data-clip-scope="favorites" aria-pressed="${filters.favorites}"><span aria-hidden="true">★</span> Favorites</button></div><details class="clip-filter-panel" ${active?'open':''}><summary>Filters <span data-filter-count ${active?'':'hidden'}>${active}</span><span class="filter-chevron" aria-hidden="true">⌄</span></summary><div class="clip-filter-fields"><label>Game<select aria-label="Filter clips by game" data-clip-filter="game">${options([['all','All games'],...games.map(g=>[g,g])],filters.game)}</select></label><label>Date<select aria-label="Filter clips by date" data-clip-filter="date">${options([['all','Any date'],['1','Today'],['7','Past week'],['30','Past month']],filters.date)}</select></label></div></details><div class="clip-active-filters" aria-label="Active clip filters">${clipFilterChips(filters)}</div><div class="clip-results-toolbar"><span id="clip-result-count" aria-live="polite">${count} ${count===1?'clip':'clips'}</span><label class="clip-sort"><select aria-label="Sort clips" data-clip-filter="sort">${options([['newest','Newest first'],['oldest','Oldest first'],['title','Filename A–Z']],filters.sort)}</select></label></div>`;
+  return `<div class="clip-collection" role="group" aria-label="Clip collection"><button type="button" data-clip-scope="all" aria-pressed="${!filters.favorites}">All clips</button><button type="button" data-clip-scope="favorites" aria-pressed="${filters.favorites}"><span aria-hidden="true">★</span> Favorites</button></div><details class="clip-filter-panel" ${active?'open':''}><summary>Filters <span data-filter-count ${active?'':'hidden'}>${active}</span><span class="filter-chevron" aria-hidden="true">⌄</span></summary><div class="clip-filter-fields"><label>Game<select aria-label="Filter clips by game" data-clip-filter="game">${options([['all','All games'],...games.map(g=>[g,g])],filters.game)}</select></label><label>Date<select aria-label="Filter clips by date" data-clip-filter="date">${options([['all','Any date'],['1','Today'],['7','Past week'],['30','Past month']],filters.date)}</select></label></div></details><div class="clip-active-filters" aria-label="Active clip filters">${clipFilterChips(filters)}</div>`;
 }
 export function filterClips(clips, filters, now = Date.now()) {
   const modified=c=>Number(BigInt(c.modified_unix_ns)/1000000n);

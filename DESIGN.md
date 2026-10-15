@@ -155,9 +155,8 @@ result and retains useful input-access errors after a helper exit.
 Settings contains the current application preferences, including Close to tray
 and software updates. Automatic update checks default on; the user can disable
 them or request a manual check. Automatic checks do not install packages.
-Close to tray, Beta access, and Debug log share one Preferences card with
-consistent switch rows; software update controls remain together beside it or
-below it when space is narrow.
+Close to tray and Debug log share one Preferences card. Feature access and
+software update controls remain together beside it, or below on narrow layouts.
 When a verified update package is already cached, an automatic check keeps it
 available. A manual check refreshes the signed release channel so a newer
 version can replace that pending package; an unavailable channel leaves the
@@ -169,6 +168,29 @@ system authorization through polkit and installs the signed package through
 the system package manager. Cancellation keeps the verified package ready to
 retry. Settings reports completion only after the installed package version
 is confirmed and says when a restart is needed.
+Group a compact updater icon, state heading and action on one row;
+narrow layouts move actions below the heading. Feature access and Check on
+startup use evenly spaced rows below one separator. Keep native errors, retryable
+installer reasons visible without clipping. Update now stays aligned like Check
+for updates, with an accessible refresh icon immediately to its left. Omit the
+version below Update available and the routine blocked-restart sentence; restart
+still remains disabled during a running session. The
+sidebar keeps the labelled Collapse sidebar control and one Settings navigation
+row. Show the running version as plain text on the right of Settings, within
+the same link. No separate version bar or sidebar install/restart actions remain.
+A small, vertically centered icon to the left of the version indicates an
+available update or required restart. Keep a 7px gap and normal text contrast
+so the icon never overlaps or dims the version. In icon-only navigation, place the badge on the Settings gear.
+The badge is passive; checking, installing and restarting stay in Software updates.
+Installation/restart progress is indeterminate;
+the version changes only when the newly installed executable starts. Restart asks to save
+or discard any global, shortcut or per-game drafts; failed saves retain pending
+edits and prevent restart. Feature access replaces the former Beta access toggle
+with Stable/Beta choices backed by the same saved preference and restart
+semantics. Stable is the default. This selector does not change update sources. The Debug
+log description omits the routine Logging is off sentence, while active/error
+status stays visible. Audio status dots in Overview
+and Replay are green while capturing, red when unavailable, and grey when inactive.
 Close to tray immediately controls tray icon visibility and closing behavior.
 Steam automatic startup and live-game window close have the temporary-icon
 exceptions described above.
@@ -183,14 +205,15 @@ Settings also owns the optional Debug log switch. It is off by default and
 takes effect on the next Redunar start. When enabled, Redunar records its
 operational messages, timestamped, into a private bounded file in the state
 directory, rotating to at most two bounded files. The saved switch is distinct
-from current logger health: Settings reports off, active, restart needed, or
+from current logger health: Settings omits the routine off sentence and reports active, restart needed, or
 unavailable, including a write failure after startup. The settings copy states
 plainly that the file can include game names and session details, and offers
 an Open log folder action once the file exists. The log never contains clip
 media. Sharing it is always the owner's explicit choice. Beta access never
 enables logging implicitly. See the [tester workflow](TESTING.md#nvidia-beta-first-hardware-test).
 
-Settings also offers Beta access, off by default. Anyone may opt in to early
+Settings offers Feature access with Stable/Beta choices. Stable maps to the
+existing disabled Beta access preference and is the default. Anyone may opt in to early
 features included in the installed build; it does not fetch code, change the
 update channel, enable Debug log, or override a feature's native capability
 checks. The preference is owned by the service and applies after an app restart
@@ -202,7 +225,7 @@ on NVIDIA hardware.
 ## Instant Replay
 
 Use a player/editor beside an independently scrolling saved-clip rail. Selection,
-loading, retry, deletion, and inventory refresh must preserve appropriate scroll,
+loading, retry, trashing, restoration, and inventory refresh must preserve appropriate scroll,
 search, focus, and save-duration state. Long filenames wrap or truncate without
 forcing horizontal scrolling; show available game, duration, date, and size.
 
@@ -264,3 +287,19 @@ Never smooth away recorded spikes, invent missing samples, or report a value
 that contradicts its plotted height. Empty, partial, unavailable, and
 compatibility data need honest states. A fixture verifies presentation, not
 native measurement.
+
+The saved-clip rail has text sorting with an arrow, a count, and individual clip
+favorites. Trash bin sits beside folder and refresh actions. There is no multiple
+selection. Trash confirmation names the file once and says “Trashed clips can be
+restored from the trash bin.” Undo lasts 10 seconds; expiration does not delete
+media. The bin offers individual Restore. Export contains Filename, the read-only
+configured replay destination, Cancel and Export; trim times remain in the editor.
+History combines text, game and date filters and clears stale reports on no match.
+
+Global settings tabs and its sidebar entry mark retained unsaved drafts. Navigation
+between app pages remains available without losing them. Immediately saved Replay
+preferences carry Auto-saved labels. Layout, preset and palette each have one control
+set beside the overlay preview. Supporting text is generally 12px with brighter
+neutral contrast. Remove redundant technical descriptions rather than adding help
+panels. The icon/wordmark, expanded-sidebar default and existing round graph joins
+remain unchanged by this refinement.

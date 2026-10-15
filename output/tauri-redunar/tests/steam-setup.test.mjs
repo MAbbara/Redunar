@@ -47,8 +47,8 @@ test('an older check cannot overwrite a newer configured response', async () => 
   pending.resolve(setup);
   await old;
   assert.equal(view.content.innerHTML,newer);
-  assert.match(newer,/Launch option configured/);
-  assert.match(newer,/Press Play in Steam\. Redunar starts automatically\./);
+  assert.match(newer,/Steam launch option detected/);
+  assert.match(newer,/Launch in Steam or through Redunar\./);
   assert.match(newer,/data-copy-steam-options/);
   assert.doesNotMatch(newer,/Paste this|check-steam-setup|steam-setup-caption/);
   assert.equal(view.button.disabled,false);
@@ -79,7 +79,7 @@ test('running Steam gives a launch step without turning ambiguity into success',
   await refreshSteamSetup(view,'1',async()=>({...setup,configuration_state:'steam-running',status:'Needs attention: Steam is running, so its in-memory Launch Options may differ from the saved file'}));
   assert.match(view.content.innerHTML,/Paste this into Steam’s Launch Options, then press Play\./);
   assert.match(view.content.innerHTML,/data-copy-steam-options/);
-  assert.doesNotMatch(view.content.innerHTML,/Needs attention|in-memory|saved file|before it is saved|Launch option configured|steam-setup-status|check-steam-setup/);
+  assert.doesNotMatch(view.content.innerHTML,/Needs attention|in-memory|saved file|before it is saved|Steam launch option detected|steam-setup-status|check-steam-setup/);
 });
 
 test('other ambiguous configuration reasons keep their explanation', async () => {

@@ -1,5 +1,5 @@
 Name:           redunar-app
-Version:        0.1.23
+Version:        0.1.24
 Release:        1.local%{?dist}
 Summary:        Steam gameplay capture and in-game metrics
 License:        GPL-3.0-or-later

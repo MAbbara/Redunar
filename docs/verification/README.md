@@ -1,5 +1,13 @@
 # Verification evidence
 
+- [October 15 workspace refinements](2026-10-15-workspace-refinements.md):
+  persistent clip trash, named exports, draft retention, audio status, updater
+  restart guards and integrated keyboard reconnect checks.
+
+- [October 14 keyboard reconnect recovery](2026-10-14-keyboard-reconnect.md):
+  automatic same-user rediscovery, stale-input/menu cleanup, private fixtures,
+  production UI inspection and a local Arch test package.
+
 - [October 13 Steam discovery review and Rust 1.98 validation](2026-10-13-library-discovery.md):
   reviewed app-ID matching and import feedback, isolated production UI checks,
   two behavior-preserving Clippy repairs and full offline validation.

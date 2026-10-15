@@ -27,6 +27,11 @@
     <category>Game</category>
   </categories>
   <releases>
+    <release version="0.1.24" date="2026-10-15">
+      <description>
+        <p>Improves clip management, settings and update controls, adds recoverable clip trash and named exports, and fixes shortcut recovery after keyboard reconnects.</p>
+      </description>
+    </release>
     <release version="0.1.23" date="2026-10-14">
       <description>
         <p>Aligns microphone input controls, clarifies disabled selection, and uses generic Replay launch guidance on Overview and Instant Replay.</p>

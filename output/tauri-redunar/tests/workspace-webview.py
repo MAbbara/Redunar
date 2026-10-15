@@ -1,130 +1,6 @@
-"""Exercise the built production UI in WebKitGTK with isolated command fixtures.
-No host profile, real game, user clip, tray or hardware settings are changed.
-"""
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-import json
-import re
-import threading
-from webkit_fixture import configure_webkit
-configure_webkit()
-import gi
-gi.require_version('Gtk','3.0')
-gi.require_version('WebKit2','4.1')
-from gi.repository import GLib, Gtk, Gdk, GdkPixbuf, WebKit2
-NATIVE=Path(__file__).resolve().parents[1]
-ARTIFACTS=NATIVE.parents[1]/'.redunar-build/reports/workspace-ui'
-ARTIFACTS.mkdir(parents=True,exist_ok=True)
-class Handler(SimpleHTTPRequestHandler):
-    def log_message(self,*_): pass
-server=ThreadingHTTPServer(('127.0.0.1',0),partial(Handler,directory=str(NATIVE/'ui/dist')))
-threading.Thread(target=server.serve_forever,daemon=True).start()
-manager=WebKit2.UserContentManager()
-fixture=r"""
-window.bridge={calls:[],errors:[],conflict:false,unavailable:false,automaticUpdates:true,startupUpdateAvailable:true,revision:1,modules:{frame_metrics:'Enabled',in_game_overlay:'Enabled',instant_replay:'Enabled'}};
-window.addEventListener('error',e=>bridge.errors.push(e.message));
-window.addEventListener('unhandledrejection',e=>bridge.errors.push(String(e.reason)));
-function artworkFixture(width,height,label,mime='image/png'){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d');const gradient=ctx.createLinearGradient(0,0,width,height);gradient.addColorStop(0,'#8b202a');gradient.addColorStop(1,'#171717');ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);ctx.fillStyle='#ffffff';ctx.font='32px sans-serif';ctx.fillText(label,30,70);return Array.from(atob(canvas.toDataURL(mime).split(',')[1]),c=>c.charCodeAt(0));}
-const posterFixture=artworkFixture(300,450,'Poster');
-const bannerFixture=artworkFixture(1200,350,'Landscape banner');
-const captureFixture=artworkFixture(640,360,'Capture fixture','image/jpeg');
-const values={overlay:true,preset:'Compact',layout:'Grid',palette:'Redunar',branding:true,position:'Top left',scale:100,opacity:90,metrics:['FPS'],captureMetrics:true,replayEnabled:true,fps:60,quality:'Balanced',format:'MKV',shortcuts:{overlay:'Ctrl+Shift+R',30:'Ctrl+Shift+S'}};
-function replayPreferencesFixture(){return {microphone_mode:bridge.microphone||'off',microphone_source:bridge.source||null,initial_save_duration_seconds:30,resolved_directory:(bridge.folder??'/fixture/Videos')+'/Redunar Replays',custom_save_parent:bridge.folder??null,close_overlay_on_outside_click:bridge.outsideClick!==false};}
-const games=[{id:'1',name:'Test game with a long local catalog title',executable:'/usr/bin/steam',arguments:['--one','--two'],working_directory:null,steam_app_id:42,revision:'1',launch_revision:'launch-1',overrides:{}},{id:'2',name:'Second local game',executable:'/fixture/second',arguments:[],revision:'1',launch_revision:'launch-2',overrides:{overlay:false}}];
-const catalogCase=new URLSearchParams(location.search).get('catalog');
-if(catalogCase){bridge.catalog=catalogCase==='populated'?games:[];bridge.idle=true;bridge.startupUpdateAvailable=false;bridge.catalogPending=catalogCase==='pending';bridge.catalogFailure=catalogCase==='failed';}
-window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'}},invoke:async(command,args={})=>{
- bridge.calls.push({command,args:structuredClone(args)});
- if(command==='save_replay'&&bridge.failSave)throw Error('Fixture save failed');
- if(command==='replay_runtime_status'&&bridge.failRuntime)throw Error('Fixture runtime unavailable');
- if(command==='daemon_status'&&bridge.failDaemon)throw Error('Fixture native status unavailable');
- if(command==='daemon_status')return bridge.unavailable?{available:false}:{available:true,diagnostic_log_status:bridge.logStatus||'off',revision:++bridge.revision,cpu_model:'Fixture CPU',cpu_utilization_percent:32,cpu_temperature_celsius:61,gpu_model:'Fixture GPU',gpu_utilization_percent:81,gpu_temperature_celsius:67,ram_used_bytes:12884901888,ram_total_bytes:34359738368,vram_used_bytes:5368709120,vram_total_bytes:12884901888};
- if(command==='session_status'&&bridge.idle)return {phase:'Idle',can_end:false,launch_locked:false,history_revision:1};
- if(command==='session_status')return {phase:'Running',game:games[0].name,can_end:true,launch_locked:true,elapsed_seconds:1938,captures_saved:3,profile_label:'Session profile',feature_summary:'Metrics enabled · replay enabled',restoration:'NotRequired',history_revision:1,measurements:{revision:bridge.revision,average_fps:141,frame_time_ms:7.1,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000+Math.round(Math.sin(bridge.revision)*700000)],phase:'Live'}};
- if(command==='replay_runtime_status'&&bridge.replayUnavailable)return {phase:'Unavailable',can_save:false,buffered_seconds:0,unavailable_reason:fixtureResolutionRejection};
- if(command==='replay_runtime_status'&&bridge.replayFailure)return {phase:'Failed',can_save:false,buffered_seconds:0,failure:'The video encoder failed. Check Replay hardware support, then relaunch the game.'};
- if(command==='replay_runtime_status'&&bridge.replayWaiting)return {phase:'Inactive',can_save:false,buffered_seconds:0,pending_reason:'Waiting for recordable game frames. Game startup or a display change can pause Replay.'};
- if(command==='replay_runtime_status'&&bridge.replayInactive)return {phase:'Inactive',can_save:false,buffered_seconds:0};
- if(command==='replay_runtime_status')return {phase:'Buffering',can_save:true,buffered_seconds:30,received_frame_count:600,encoded_packet_count:600,audio_packet_count:1500,audio_byte_count:4500,audio_active:true,completed_save_revision:1};
- if(command==='module_statuses')return structuredClone(bridge.modules);
- if(command==='discover_games')return structuredClone(bridge.discovered||[]);
- if(command==='import_discovered_games'){await new Promise(resolve=>setTimeout(resolve,180));if(bridge.failImport)throw Error('Another Redunar app owns the backend session. Close it, then reopen this app before editing saved data.');return structuredClone(games);}
- if(command==='catalog_games'){if(bridge.catalogPending)await new Promise(resolve=>bridge.releaseCatalog=resolve);if(bridge.catalogFailure)throw Error('Fixture catalog unavailable');return structuredClone(bridge.catalog??games);}
- if(command==='game_installation_statuses'){if(bridge.installationFailure)throw Error('Fixture library unavailable');return bridge.installation||{'1':'installed','2':'installed'};}
- if(command==='game_poster')return posterFixture;
- if(command==='game_banner')return args.gameId==='1'?bannerFixture:null;
- if(command==='replay_clips')return bridge.clips??=Array.from({length:3},(_,i)=>({file_name:`redunar-replay-1789254367-629872093-${i+1}-a-long-capture-filename.mkv`,title:`Capture ${i+1}`,game_name:i===0?games[0].name:null,bytes:68000000,modified_unix_ns:'1789300000000000000',duration_seconds:30}));
- if(command==='clip_metadata')return {duration_seconds:30,width:640,height:360,fps:60};
- if(command==='clip_thumbnail')return captureFixture;
- if(command==='replay_storage_status')return {used_bytes:204000000,available_bytes:bridge.lowDisk?950000000:137400000000,total_bytes:512000000000};
- if(command==='microphone_inputs'){if(bridge.failInputs)throw Error('Fixture audio server unavailable');return [{id:'usb-mic',label:'USB microphone'},{id:'internal-mic',label:'Internal microphone'}];}
- if(command==='pick_replay_folder')return bridge.pickedFolder??null;
- if(command==='set_replay_save_parent'){bridge.folder=args.parent;return replayPreferencesFixture();}
- if(command==='set_clip_details'){await new Promise(r=>setTimeout(r,80));if(bridge.failFavorite)throw Error('Fixture favorite persistence failed');const c=bridge.clips.find(c=>c.file_name===args.fileName);c.favorite=args.favorite;return {file_name:c.file_name,favorite:c.favorite};}
- if(command==='rename_replay_clip'){await new Promise(r=>setTimeout(r,80));if(bridge.failRename)throw Error('A clip with that filename already exists');const c=bridge.clips.find(c=>c.file_name===args.fileName);c.file_name=args.newFileName;return {file_name:c.file_name,favorite:Boolean(c.favorite)};}
- if(command==='app_preferences')return {close_to_tray:false,automatic_updates:bridge.automaticUpdates,diagnostic_log:bridge.logRequested===true,diagnostic_log_status:bridge.logStatus||'off'};
- if(command==='set_close_to_tray')return {close_to_tray:args.enabled,automatic_updates:bridge.automaticUpdates};
- if(command==='set_diagnostic_log'){bridge.logRequested=args.enabled;return {diagnostic_log:args.enabled,diagnostic_log_status:bridge.logStatus||'off'};}
- if(command==='set_automatic_updates'){bridge.automaticUpdates=args.enabled;return {close_to_tray:false,automatic_updates:bridge.automaticUpdates};}
- if(command==='check_for_updates'){
-  if(bridge.installedUpdate)return {current_version:'0.1.2',state:'restart-needed',message:'Redunar 0.1.3 is installed. Fully quit Redunar, including its tray process, then reopen it to load the update.',latest_version:'0.1.3',package_kind:'rpm',asset_name:'redunar-app-linux-x86_64.rpm'};
-  if(bridge.startupUpdateAvailable){bridge.startupUpdateAvailable=false;return {current_version:'0.1.2',state:'available',message:'Redunar 0.1.3 has a verified update package.',latest_version:'0.1.3',package_kind:'rpm',asset_name:'redunar-app-linux-x86_64.rpm'};}
-  return {current_version:'0.1.3',state:'not-configured',message:'Signed update checking is not configured in this build yet.'};
- }
- if(command==='install_update')return {state:'handoff',message:'The installer finished, but Redunar could not confirm the new package version. Check again or retry installation.'};
- if(command==='global_settings')return {values:structuredClone(values),revision:'1'};
- if(command==='save_global_settings'){if(bridge.conflict)throw new Error('Saved defaults changed elsewhere. Reload before saving.');Object.assign(values,args.input);return {values:structuredClone(values),revision:'2'};}
- if(command==='save_game_profile'){games.find(g=>g.id===args.gameId).overrides=Object.fromEntries(Object.entries(args.values).filter(([,v])=>v!==null));return {games:structuredClone(games),liveNotice:'Game settings saved. The running game overlay was updated.'};}
- if(command==='update_game_launch'){bridge.launchArgs=args.arguments;return structuredClone(games);}
- if(command==='save_shortcuts'){values.shortcuts=args.shortcuts;return {values:structuredClone(values)};}
- if(command==='set_replay_overlay_behavior'){bridge.outsideClick=args.closeOnOutsideClick;return {...replayPreferencesFixture(),overlay_shortcut:values.shortcuts.overlay||''};}
- if(command==='steam_setup_status'){if(bridge.failSteamSetup)throw Error('Fixture Steam setup unavailable');return bridge.steamSetup||{available:true,configured:false,app_id:42,configuration_state:'not-configured',status:'Not configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};}
- if(command==='set_replay_microphone'){await new Promise(resolve=>setTimeout(resolve,80));if(bridge.failMicrophone)throw Error('Fixture microphone write failed');bridge.microphone=args.mode;bridge.source=args.source||null;return replayPreferencesFixture();}
- if(command==='replay_preferences')return replayPreferencesFixture();
- if(command==='replay_display_capability')return {compatible_120_modes:0,status:'No compatible display'};
- if(command==='activate_shortcuts')bridge.shortcutUnavailable=false;
- if(command==='shortcut_status'&&bridge.shortcutUnavailable)return {state:'Unavailable',message:'No readable keyboard input device'};
- if(command==='shortcut_status'||command==='activate_shortcuts')return {state:Object.values(values.shortcuts).some(Boolean)?'Active':'Inactive'};
- if(command==='session_history')return bridge.historyFixture??[0,1,2].map((n)=>({id:n+1,game:n===2?'Other local game':games[0].name,started_unix:1789300000-n*86400,duration_seconds:1800,average_fps:141-n,one_percent_low_fps:118,point_one_percent_low_fps:97,frame_intervals_ns:[7100000,7300000],timeline:Array.from({length:96},(_,i)=>({elapsed_seconds:i*1800/95,fps:135+Math.sin(i)*6,frame_time_ms:7.1+Math.sin(i)*.3,cpu_temperature_celsius:61,gpu_temperature_celsius:67,cpu_utilization_percent:32,gpu_utilization_percent:81}))}));
- return {};
-}};
-window.check=(condition,message)=>{if(!condition)throw new Error(message)};
-window.q=s=>document.querySelector(s);window.qa=s=>Array.from(document.querySelectorAll(s));
-window.click=s=>{const el=q(s);check(!!el,'Missing '+s);check(!el.disabled,'Disabled '+s);el.click();};
-"""
-resolution_copy = re.search(r'Some\(ReplaySourceRejection::DimensionsUnsupported\) =>\s*(?:\{\s*)?"([^"]+)"', (NATIVE/'src-tauri/src/runtime.rs').read_text()).group(1)
-fixture = "const fixtureResolutionRejection=" + json.dumps(resolution_copy) + ";" + fixture
-fixture = "window.fixturePalettes=" + (NATIVE / "ui/overlay-palettes.json").read_text() + ";" + fixture
-manager.add_script(WebKit2.UserScript.new(fixture,WebKit2.UserContentInjectedFrames.TOP_FRAME,WebKit2.UserScriptInjectionTime.START,None,None))
-view=WebKit2.WebView.new_with_user_content_manager(manager)
-view.set_background_color(Gdk.RGBA(0,0,0,0))
-window=Gtk.Window();window.set_default_size(1440,1000);window.add(view);window.show_all()
-def pump(ms=250):
-    loop=GLib.MainLoop();GLib.timeout_add(ms,lambda:(loop.quit(),False)[1]);loop.run()
-def js(source):
-    loop=GLib.MainLoop();result=[]
-    def done(w,value,_):
-        try: result.append(w.evaluate_javascript_finish(value).to_string())
-        except Exception as error: result.append(error)
-        loop.quit()
-    view.evaluate_javascript('(()=>{'+source+'})()',-1,None,None,None,done,None);loop.run()
-    if isinstance(result[0],Exception):raise result[0]
-    return result[0]
-def snap(name):
-    loop=GLib.MainLoop()
-    def done(w,value,_):w.get_snapshot_finish(value).write_to_png(str(ARTIFACTS/(name+'.png')));loop.quit()
-    view.get_snapshot(WebKit2.SnapshotRegion.VISIBLE,WebKit2.SnapshotOptions.NONE,None,done,None);loop.run()
-def route(name):js("location.hash="+json.dumps(name));pump(400)
-def wait_for(expression, timeout_ms=5000):
-    for _ in range(timeout_ms//100):
-        if js('return Boolean('+expression+')')=='true': return
-        pump(100)
-    raise AssertionError('Timed out waiting for '+expression)
-checks=[]
-def test(name,source,wait_ms=0):
-    js(source);checks.append(name)
-    if wait_ms: pump(wait_ms)
+"""Production workspace interaction checks using isolated native-command fixtures."""
+from webview_fixture import *
+
 try:
     view.load_uri(f'http://127.0.0.1:{server.server_port}/?catalog=pending#overview');pump(900)
     test('A pending catalog never displays first-game guidance',"check(q('#library-start-guide').hidden,'loading is not an empty library');check(!q('#steam-capture-guide'),'old Steam banner removed');bridge.catalogPending=false;bridge.releaseCatalog();")
@@ -196,7 +72,7 @@ try:
     js("window.steamField=q('#steam-launch-options');steamField.focus();steamField.setSelectionRange(10,20);window.dispatchEvent(new Event('focus'))");pump()
     test('Unchanged setup focus refresh preserves selection and profile drafts',"check(q('#steam-launch-options')===steamField&&document.activeElement===steamField,'same focused field');check(steamField.selectionStart===10&&steamField.selectionEnd===20,'selection preserved');check(q('[data-override=overlay]').value==='Off'&&!q('.game-save-bar').hidden,'draft preserved');")
     js("bridge.steamSetup={available:true,configured:true,app_id:42,configuration_state:'configured',status:'Configured',launch_options:'/usr/bin/redunar-steam-launch --app-id 42 -- %command%'};window.dispatchEvent(new Event('focus'))");pump()
-    test('Configured Steam games retain their copyable option and unrelated drafts',"check(q('.steam-setup-status').textContent==='Launch option configured','verified setup');check(q('.steam-setup-card').textContent.includes('Press Play in Steam. Redunar starts automatically.'),'launch instruction');check(q('#steam-launch-options')&&!q('[data-action=check-steam-setup]'),'configured option retained');check(q('[data-override=overlay]').value==='Off'&&!q('.game-save-bar').hidden,'draft preserved after changed evidence');click('[data-action=discard-game]');")
+    test('Configured Steam games retain their copyable option and unrelated drafts',"check(q('[data-steam-configured]'),'verified setup');check(q('.steam-setup-card').textContent.includes('Launch in Steam or through Redunar.'),'launch instruction');check(q('.steam-configured-details')&&!q('.steam-configured-details').open&&!q('[data-action=check-steam-setup]'),'compact configured status');q('.steam-configured-details').open=true;check(q('#steam-launch-options'),'configured option retained');check(q('[data-override=overlay]').value==='Off'&&!q('.game-save-bar').hidden,'draft preserved after changed evidence');click('[data-action=discard-game]');")
     snap('steam-play-configured')
     js("bridge.steamSetup.configuration_state='steam-running';bridge.steamSetup.configured=false;bridge.steamSetup.status='Needs attention: Steam is running, so its in-memory Launch Options may differ from the saved file';window.dispatchEvent(new Event('focus'))");pump()
     test('Running Steam keeps compact setup without claiming setup success',"const text=q('.steam-setup-card').textContent;check(!q('.steam-setup-status')&&!q('[data-action=check-steam-setup]'),'no routine status or retry');check(text.includes('Paste this into Steam’s Launch Options, then press Play.'),'clear next step');check(!text.includes('Needs attention')&&!text.includes('in-memory')&&!text.includes('before it is saved')&&!text.includes('configured'),'no technical warning or false confirmation');check(q('#steam-launch-options'),'actionable value retained');")
@@ -257,12 +133,12 @@ try:
     test('HUD preview retains native FPS typography',"check(getComputedStyle(q('.hud-native-value')).fontSize==='24px','native 24px measurement font');")
     test('Clean global settings hide draft actions',"check(q('.settings-save-bar').hidden,'clean bar hidden')")
     snap('global-overlay')
-    test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');const layout=q('[data-global=layout]');layout.value='Ribbon';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')===window.fixturePalettes.Glacier[0],'glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
-    test('Every overlay palette controls both preview borders',"const expected=Object.fromEntries(Object.entries(window.fixturePalettes).map(([name,colors])=>[name,[colors[0],colors[4]].map(hex=>'rgb('+[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)).join(', ')+')')]));const palette=q('[data-global=palette]'),hud=q('#hud');for(const [name,[accent,border]] of Object.entries(expected)){palette.value=name;palette.dispatchEvent(new Event('change',{bubbles:true}));const style=getComputedStyle(hud);check(style.borderLeftColor===accent,name+' accent border');check(style.borderTopColor===border,name+' panel border');}palette.value='Glacier';palette.dispatchEvent(new Event('change',{bubbles:true}));")
+    test('Layout and palette change structure and color without changing selected metrics',"const metrics=[...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|');click('[data-layout=Ribbon]');click('[data-palette=Glacier]');const hud=q('#hud'),brand=q('.hud-layout-brand'),brandText=q('.hud-layout-brand span'),hudBounds=hud.getBoundingClientRect(),textBounds=brandText.getBoundingClientRect();check(hud.dataset.layout==='Ribbon','ribbon preview');check(getComputedStyle(hud).width==='628px','ribbon fits six visible metrics');check(getComputedStyle(brand).flexDirection==='row','generic HUD rule does not top-align brand');check(Math.abs((textBounds.top+textBounds.bottom-hudBounds.top-hudBounds.bottom)/2)<1,'brand text vertically centered');check(hud.style.getPropertyValue('--hud-accent')===window.fixturePalettes.Glacier[0],'glacier accent');check([...document.querySelectorAll('[data-metric]:checked')].map(input=>input.dataset.metric).join('|')===metrics,'metrics unchanged');check(q('[data-layout=Ribbon]').getAttribute('aria-pressed')==='true','layout card selected');check(q('[data-palette=Glacier]').getAttribute('aria-pressed')==='true','palette swatch selected');")
+    test('Every overlay palette controls both preview borders',"const expected=Object.fromEntries(Object.entries(window.fixturePalettes).map(([name,colors])=>[name,[colors[0],colors[4]].map(hex=>'rgb('+[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)).join(', ')+')')]));const hud=q('#hud');for(const [name,[accent,border]] of Object.entries(expected)){click('[data-palette='+name+']');const style=getComputedStyle(hud);check(style.borderLeftColor===accent,name+' accent border');check(style.borderTopColor===border,name+' panel border');}click('[data-palette=Glacier]');")
     snap('global-overlay-ribbon-glacier')
-    test('Telemetry and Rose produce the dense preview',"const layout=q('[data-global=layout]');layout.value='Telemetry';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Rose';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('#hud').dataset.layout==='Telemetry','telemetry preview');check(q('.hud-telemetry-row'),'dense metric row');check(q('#hud').style.getPropertyValue('--hud-accent')==='#ff82ad','rose accent');")
+    test('Telemetry and Rose produce the dense preview',"click('[data-layout=Telemetry]');click('[data-palette=Rose]');check(q('#hud').dataset.layout==='Telemetry','telemetry preview');check(q('.hud-telemetry-row'),'dense metric row');check(q('#hud').style.getPropertyValue('--hud-accent')==='#ff82ad','rose accent');")
     snap('global-overlay-telemetry-rose')
-    js("const layout=q('[data-global=layout]');layout.value='Grid';layout.dispatchEvent(new Event('change',{bubbles:true}));const palette=q('[data-global=palette]');palette.value='Redunar';palette.dispatchEvent(new Event('change',{bubbles:true}));check(q('.settings-save-bar').hidden,'restored style is clean')")
+    js("click('[data-layout=Grid]');click('[data-palette=Redunar]');check(q('.settings-save-bar').hidden,'restored style is clean')")
     test('Branding can be hidden without hiding metrics',"const branding=q('[data-global=branding]');branding.click();check(!q('#hud').textContent.includes('REDUNAR'),'branding removed from preview');check(q('.hud-native-frame'),'metrics remain visible');branding.click();check(q('#hud').textContent.includes('REDUNAR'),'branding restored');check(q('.settings-save-bar').hidden,'restored branding is clean');")
     test('Global toggles preserve booleans across input and change',"q('[data-global=overlay]').click();click('[data-action=save-global]')")
     pump()
@@ -270,12 +146,17 @@ try:
     test('Conflicts retain unsaved draft',"bridge.conflict=true;click('[data-action=save-global]')")
     pump()
     test('Conflict feedback and retry state',"check(q('#toast').textContent.includes('changed elsewhere'),'conflict surfaced');check(!q('[data-action=save-global]').disabled,'draft preserved');bridge.conflict=false;click('[data-action=discard-global]');check(!q('[data-global=overlay]').checked,'discard uses saved false');check(q('.settings-save-bar').hidden,'discard hides bar');")
-    test('Preset and range update native preview',"const preset=q('[data-global=preset]');preset.value='Custom';preset.dispatchEvent(new Event('change',{bubbles:true}));check(!q('[data-metric=FPS]').disabled,'custom metrics enabled');const range=q('[data-global=scale]');range.value='150';range.dispatchEvent(new Event('input',{bubbles:true}));check(q('#hud').style.getPropertyValue('--hud-scale')==='1.5','native geometry scale');check(range.style.getPropertyValue('--range-fill')!=='','precision fill');")
+    test('Preset and range update native preview',"click('[data-preset=Custom]');check(!q('[data-metric=FPS]').disabled,'custom metrics enabled');const range=q('[data-global=scale]');range.value='150';range.dispatchEvent(new Event('input',{bubbles:true}));check(q('#hud').style.getPropertyValue('--hud-scale')==='1.5','native geometry scale');check(range.style.getPropertyValue('--range-fill')!=='','precision fill');")
     js("click('[data-global-tab=replay]')");pump()
     test('Draft survives global tab switch with the current recording modes',"check(!q('[data-action=save-global]').disabled,'draft retained across tabs');check([...q('[data-global=fps]').options].map(option=>option.value).join(',')==='60,240','60 and Variable modes; legacy rates are shown only when saved');check(!q('.global-grid'),'removed replay card leaves no empty grid column');const a=q('.replay-pref-actions').getBoundingClientRect(),above=q('.replay-pref-actions').previousElementSibling.getBoundingClientRect();check(a.top-above.bottom>=15,'folder action divider spacing')")
     test('Global draft actions remain at viewport bottom while scrolling',"const bar=q('.settings-save-bar'),root=q('.window-content');check(!bar.hidden,'dirty bar shown');root.scrollTo(0,root.scrollHeight);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed while scrolled');root.scrollTo(0,0);check(Math.abs(innerHeight-bar.getBoundingClientRect().bottom-16)<1,'fixed at page start');")
     snap('global-replay')
     js("click('[data-global-tab=shortcuts]')");pump()
+    js("bridge.keyboardWaiting=true");pump(2800)
+    test('Keyboard loss explains automatic recovery and keeps shortcut drafts',"check(q('#shortcut-feedback').textContent.includes('Waiting for keyboard access to return.'),'automatic recovery reason visible');check(!q('[data-action=retry-shortcuts]').hidden,'retry remains available');const input=q('[data-shortcut]');window.reconnectOriginal=input.value;input.value='Ctrl+Alt+Z';input.dispatchEvent(new Event('input',{bubbles:true}));window.reconnectWrites=bridge.calls.filter(call=>['save_shortcuts','activate_shortcuts'].includes(call.command)).length;")
+    snap('shortcuts-waiting-keyboard')
+    js("bridge.keyboardWaiting=false");pump(2800)
+    test('Keyboard recovery becomes active without saving or retrying',"check(q('[data-action=retry-shortcuts]').hidden,'automatically active');check(q('[data-shortcut]').value==='Ctrl+Alt+Z','pending draft retained');check(!q('#shortcut-feedback').textContent.includes('Waiting'),'waiting reason cleared');check(bridge.calls.filter(call=>['save_shortcuts','activate_shortcuts'].includes(call.command)).length===reconnectWrites,'recovery made no writes or retry');const input=q('[data-shortcut]');input.value=reconnectOriginal;input.dispatchEvent(new Event('input',{bubbles:true}));")
     js("bridge.shortcutUnavailable=true");pump(2800);snap('shortcuts-unavailable')
     test('Shortcut failure has a retry action and retains unsaved bindings',"check(!q('[data-action=retry-shortcuts]').hidden,'retry available');check(q('#shortcut-feedback').textContent.includes('No readable keyboard'),'failure reason visible');const input=q('[data-shortcut]');window.previousShortcut=input.value;input.value='Ctrl+Alt+Z';input.dispatchEvent(new Event('input',{bubbles:true}));window.pendingShortcut=input.value;window.shortcutWrites=bridge.calls.filter(call=>call.command==='save_shortcuts').length;click('[data-action=retry-shortcuts]');",350)
     test('Retry activation avoids changing saved or pending shortcuts',"check(q('[data-action=retry-shortcuts]').hidden,'active retry hidden');check(q('[data-shortcut]').value===pendingShortcut,'draft preserved');check(bridge.calls.filter(call=>call.command==='save_shortcuts').length===shortcutWrites,'retry made no preference write');const input=q('[data-shortcut]');input.value=previousShortcut;input.dispatchEvent(new Event('input',{bubbles:true}));")
@@ -383,7 +264,7 @@ try:
     test('Empty History disables the timeline without inventing numbers',"check(q('[data-history-cursor]').disabled,'disabled scrubber');check(q('#history-moment-fps').textContent==='—','unknown FPS');check(q('#history-slider-time').textContent==='00:00','zero duration');check(!q('#history-cursor-line'),'no fabricated graph');bridge.historyFixture=null;click('[data-action=reload-history]');")
     pump()
     route('settings');snap('settings')
-    test('Debug log distinguishes saved opt-in from runtime health',"check(q('#diagnostic-log-status').textContent==='Logging is off.','actual logger off');q('[data-preference=diagnostic-log]').click()")
+    test('Debug log distinguishes saved opt-in from runtime health',"check(q('#diagnostic-log-status').textContent==='','actual logger off');q('[data-preference=diagnostic-log]').click()")
     pump();test('Debug log enable requires restart',"check(q('#diagnostic-log-status').textContent.includes('Restart Redunar'),'preference alone is not active');bridge.logStatus='active';")
     pump(2800);test('Active logging is observed from native status',"check(q('#diagnostic-log-status').textContent.includes('active on this device'),'live health');bridge.failDaemon=true;")
     pump(2800);test('Rejected native status clears stale active logging',"check(!q('#diagnostic-log-status').textContent.includes('active on this device'),'stale active cleared');check(q('#diagnostic-log-status').textContent.includes('unavailable'),'unknown health visible');bridge.failDaemon=false;bridge.logStatus='unavailable';")
@@ -400,17 +281,18 @@ try:
     js("q('[data-preference=tray]').click()");pump()
     test('Disabling tray sends the native removal immediately',"check(bridge.calls.findLast(c=>c.command==='set_close_to_tray').args.enabled===false,'native removal requested');check(!q('[data-preference=tray]').checked,'disabled state shown');")
     js("click('[data-action=install-update]')");pump()
-    test('Verified startup update keeps retry available',"check(bridge.calls.some(c=>c.command==='install_update'),'native update request');check(q('[data-action=install-update]').textContent==='Retry update','unconfirmed install can retry');check(q('[data-action=check-for-updates]').textContent==='Check again','manual recheck remains available');check(q('[data-update-state]').textContent.includes('Installation unconfirmed'),'installer exit is not success');check(q('.updates-heading .pill').textContent==='Version 0.1.2','current version retained');check(q('#toast').textContent.includes('could not confirm'),'update feedback');")
+    test('Verified startup update keeps retry available',"check(bridge.calls.some(c=>c.command==='install_update'),'native update request');check(q('[data-action=install-update]').textContent==='Retry update','unconfirmed install can retry');check(q('[data-action=check-for-updates]').getAttribute('aria-label')==='Check for updates','accessible refresh remains available');check(q('[data-update-state]').textContent.includes('Installation not confirmed'),'installer exit is not success');check(q('.sidebar-version-number').textContent==='v0.1.2','current version retained');check(q('#toast').textContent.includes('could not confirm'),'update feedback');")
     snap('settings-handoff')
+    js("q('[data-preference=automatic-updates]').click()");pump(500)
+    test('Automatic update preference persists independently',"check(bridge.calls.findLast(c=>c.command==='set_automatic_updates').args.enabled===false,'automatic checks disabled');check(!q('[data-preference=automatic-updates]').checked,'saved update preference shown');click('[data-action=check-for-updates]');")
+    pump();test('Manual update check reports authenticated-source readiness honestly',"check(bridge.calls.some(c=>c.command==='check_for_updates'),'manual native check');check(q('[data-update-state]').textContent==='Updates unavailable','honest readiness state');check(q('#toast').textContent.includes('not configured'),'honest check feedback');")
+    snap('settings-updates')
     pump(700);js("bridge.installedUpdate=true;click('[data-action=check-for-updates]')");pump()
-    test('Installed package requires restart without offering a second install',"check(q('[data-update-state]').textContent==='Package installed · restart Redunar','installed package recognized');check(!q('[data-action=install-update]'),'cannot reinstall completed package');check(q('[data-action=check-for-updates]'),'recheck available');check(bridge.calls.findLast(c=>c.command==='check_for_updates').args.refreshPending===true,'manual check requests newest signed release')")
+    test('Installed package requires restart without offering a second install',"check(q('[data-update-state]').textContent==='Update installed','installed package recognized');check(!q('[data-action=install-update]'),'cannot reinstall completed package');check(q('[data-action=restart-redunar]'),'restart available');check(bridge.calls.findLast(c=>c.command==='check_for_updates').args.refreshPending===true,'manual check requests newest signed release')")
     snap('settings-restart-needed')
     js('bridge.installedUpdate=false')
     route('overview');route('settings')
-    js("q('[data-preference=automatic-updates]').click()");pump(500)
-    test('Automatic update preference persists independently',"check(bridge.calls.findLast(c=>c.command==='set_automatic_updates').args.enabled===false,'automatic checks disabled');check(!q('[data-preference=automatic-updates]').checked,'saved update preference shown');click('[data-action=check-for-updates]');")
-    pump();test('Manual update check reports authenticated-source readiness honestly',"check(bridge.calls.some(c=>c.command==='check_for_updates'),'manual native check');check(q('[data-update-state]').textContent==='Source pending','honest readiness state');check(q('#toast').textContent.includes('not configured'),'honest check feedback');")
-    snap('settings-updates')
+
     route('overview')
     test('Shared capture bar saves directly on Overview',"check(q('.capture-status-heading').textContent==='Ready to save','ready summary');check(!q('.capture-summary-actions'),'no extra editor link');q('#save-duration').value='60';q('#save-duration').dispatchEvent(new Event('change',{bubbles:true}));check(q('#save-replay-shortcut').hidden,'no invented binding');")
     route('replay')

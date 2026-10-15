@@ -84,6 +84,16 @@ Background startup also locates the matching helper beside a local build or in
 an unpacked package's sibling `libexec` directory; it does not need inherited
 game environment overrides. This lookup does not grant input-device access.
 
+Keyboard discovery retries once per second while the helper is running, including
+when no keyboard is readable at startup. A reconnect replaces the old input
+handle even if Linux reuses its event path. Device loss clears that device's
+held-key state and closes an open Replay menu to release pointer control.
+When no readable keyboard remains, activation reports Unavailable and waits for
+access to return; it becomes Active automatically after a successful open.
+A mouse dongle may expose a valid keyboard interface, so Active means at least
+one readable keyboard interface, not proof that every attached keyboard is
+monitored. Saved shortcuts and unsaved UI drafts are unchanged by rediscovery.
+
 The shortcut opens the Replay menu inside the captured game: the active Vulkan
 or OpenGL capture backend renders the panel into the game's own presentation
 target, so compositor stacking rules and fullscreen focus games cannot hide it
@@ -380,7 +390,10 @@ muted decoder; timeouts or missing previews must not disable valid playback.
 See PERFORMANCE for worker/decoder bounds.
 
 Export re-encodes the selected range for accurate boundaries, reports progress,
-supports cancellation, and commits a separate clip. The original is never deleted
+supports cancellation, and commits a separate MP4. The filename field edits its
+stem only; the native store appends .mp4 and saves exclusively in the configured
+Replay folder. Existing destinations are never overwritten. Named exports retain
+an original generated identity for attribution and crash-safe ownership. The original is never deleted
 or archived as part of trimming. FFmpeg playback/export capabilities must be
 validated separately from the live hardware encoder. Native checks resolve the
 installed executables from PATH, check required encoders on demand, and diagnose
@@ -434,3 +447,22 @@ Redunar Replays child. Input enumeration uses bounded PipeWire/Pulse discovery,
 excludes output monitors, reports unavailable inputs and preserves an unplugged
 saved selection. Input selection applies to the next launch and remains locked
 through launch, recording and teardown, as described in Audio behavior.
+
+## Recoverable clip trash
+
+Moving a clip to the trash bin hides it from the saved-clip inventory without
+moving or deleting media bytes. A separate private `.redunar-clip-trash-v1` ledger
+uses the same bounded, inode-bound records as filename labels; existing label and
+profile formats do not change. The native service accepts one exact clip identifier
+per request. Trash and restore are idempotent, serialize against export admission,
+and reject secondary owners, unsafe/replaced files and invalid metadata. Restore
+preserves filename, game attribution and favorite. The 10-second Undo notice is
+only a shortcut to Restore; no retention or automatic deletion is introduced.
+Disk usage includes trashed files. Changing folders leaves their files and bin
+state in the old store; returning to that store makes them available again. Older
+versions that lack the bin reader show those files as ordinary recordings.
+
+Microphone status is cached native packet freshness, independently of system audio
+and video readiness. Enabled input starts Waiting, reports Capturing only with
+recent packets, and becomes Unavailable after three seconds without progress.
+An intentionally disabled input is Off. Status polling adds no device scan.

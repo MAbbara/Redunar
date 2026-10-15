@@ -9,11 +9,11 @@ test('Filters compose game, date, search and favorite without mutating library',
 test('Filename and chronological sorting retain filename identities',()=>{assert.deepEqual(filterClips(clips,{...filters,sort:'oldest'},now).map(c=>c.file_name),['c','b','a']);assert.deepEqual(filterClips(clips,{...filters,sort:'title'},now).map(c=>c.file_name),['a','b','c']);});
 test('Date filters exclude older clips while unfiltered includes every age',()=>{assert.equal(filterClips(clips,{...filters,date:'7'},now).length,2);assert.equal(filterClips(clips,filters,now).length,3);assert.equal(filterClips(clips,{...filters,search:'missing'},now).length,0);});
 test('Comparison allows only another same-game session and escapes labels',()=>{const s=[{id:1,game:'a'},{id:2,game:'a',date:'<today>',time:'12:00',duration:'30m'},{id:3,game:'b'}];const html=comparisonSelector(s,0,'2');assert.match(html,/value="2" selected/);assert.doesNotMatch(html,/value="1"|value="3"/);assert.match(html,/&lt;today&gt;/);});
-test('Capture failure does not claim buffering or active audio',()=>{const html=captureSummary({phase:'Failed',can_save:false,failure:'Encoder failed'},{});assert.match(html,/data-state="error"/);assert.match(html,/Encoder failed/);assert.doesNotMatch(html,/seconds buffered|System audio active/);});
-test('Shared capture summary groups actual buffer and audio status',()=>{const runtime={phase:'Buffering',can_save:true,buffered_seconds:32,audio_active:true};assert.match(captureSummary(runtime),/32 seconds buffered.*System audio active/);assert.doesNotMatch(captureSummary(runtime),/Open Replay|Set a save shortcut/);});
+test('Capture failure does not claim buffering or active audio',()=>{const html=captureSummary({phase:'Failed',can_save:false,failure:'Encoder failed'},{});assert.match(html,/data-state="error"/);assert.match(html,/Encoder failed/);assert.doesNotMatch(html,/seconds buffered|System audio capturing/);});
+test('Shared capture summary groups actual buffer and audio status',()=>{const runtime={phase:'Buffering',can_save:true,buffered_seconds:32,audio_active:true};assert.match(captureSummary(runtime),/32 seconds buffered.*System audio capturing/);assert.doesNotMatch(captureSummary(runtime),/Open Replay|Set a save shortcut/);});
 test('Disk space distinguishes low, available and unavailable without deletion policy',()=>{assert.match(storageSummary({available_bytes:1e9,total_bytes:10e9}),/low-space/);assert.doesNotMatch(storageSummary({available_bytes:20e9,total_bytes:100e9}),/low-space/);assert.match(storageSummary(null),/unavailable/);});
 test('Microphone selection is disabled during a launch and retains selected identity',()=>{const html=microphoneSelector([{id:'usb',label:'USB <mic>'}],{microphone_mode:'selected',microphone_source:'usb'},true);assert.match(html,/data-microphone-source disabled/);assert.match(html,/value="usb" selected/);assert.match(html,/USB &lt;mic&gt;/);});
-test('Explicit rejection wins over conflicting readiness fields',()=>{const html=captureSummary({phase:'Buffering',can_save:true,buffered_seconds:100,audio_active:true,unavailable_reason:'Capture source rejected'},{});assert.match(html,/data-state="error"/);assert.match(html,/Capture source rejected/);assert.doesNotMatch(html,/seconds buffered|System audio active/);});
+test('Explicit rejection wins over conflicting readiness fields',()=>{const html=captureSummary({phase:'Buffering',can_save:true,buffered_seconds:100,audio_active:true,unavailable_reason:'Capture source rejected'},{});assert.match(html,/data-state="error"/);assert.match(html,/Capture source rejected/);assert.doesNotMatch(html,/seconds buffered|System audio capturing/);});
 
 test('Applied clip filters remain visible and removable with escaped game identity',()=>{
  const filtered={...filters,game:'<Circuit>',date:'7'};
@@ -47,7 +47,7 @@ test('Filename editing hides and preserves the original extension, including nam
 test('Both pages preserve escaped failures without readiness or audio claims',()=>{
  for(const page of ['overview','replay']) {
   const html=captureSummary({phase:'Buffering',can_save:true,buffered_seconds:120,audio_active:true,failure:'Encoder <failed>'},{30:'F8'},30,page);
-  assert.match(html,/role="alert"/);assert.match(html,/Encoder &lt;failed&gt;/);assert.doesNotMatch(html,/Ready to save|seconds buffered|System audio active/);
+  assert.match(html,/role="alert"/);assert.match(html,/Encoder &lt;failed&gt;/);assert.doesNotMatch(html,/Ready to save|seconds buffered|System audio capturing/);
   assert.doesNotMatch(html,/Open Replay/);
  }
 });

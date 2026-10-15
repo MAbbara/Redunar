@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         bridge.thumbnailCalls++;
         return new Promise(resolve=>bridge.thumbnails.push(()=>resolve(Array.from(atob(JPEG),c=>c.charCodeAt(0)))));
       }
-      if(command==='export_replay_clip'){bridge.exported=args;return {file_name:args.fileName,duration_seconds:args.endSeconds-args.startSeconds,bytes:1024};}
+      if(command==='export_replay_clip'){bridge.exported=args;if(bridge.failExport)throw Error('A clip with that filename already exists');return {file_name:args.fileName,duration_seconds:args.endSeconds-args.startSeconds,bytes:1024};}
       if(command==='replay_storage_status')return {used_bytes:24576};
       if(command==='catalog_games'||command==='session_history')return [];
       if(command==='replay_runtime_status')return {phase:'Unavailable',unavailable_reason:'OpenGL capture is unavailable for this game',completed_save_revision:0};
@@ -294,10 +294,12 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         document.querySelector('#export-clip-button').click();
         const form=document.querySelector('#trim-export-form');
         check(form.elements.start.value==='0.25'&&form.elements.end.value==='2.75','exact export boundaries');
-        form.requestSubmit();
+        form.elements.outputName.value='My named trim';bridge.failExport=true;form.requestSubmit();
         """)
         pump(350)
-        js("check(bridge.exported.startSeconds===.25&&bridge.exported.endSeconds===2.75,'export sent exact range')")
+        js("check(document.querySelector('#dialog').open,'export collision retains dialog');check(document.querySelector('#dialog-body').textContent.includes('already exists'),'collision explanation');check(document.querySelector('[name=outputName]').value==='My named trim','filename retained for retry');bridge.failExport=false;document.querySelector('#trim-export-form').requestSubmit();")
+        pump(350)
+        js("check(bridge.exported.startSeconds===.25&&bridge.exported.endSeconds===2.75,'export sent exact range');check(bridge.exported.outputName==='My named trim','filename stem sent');check(!('destination' in bridge.exported),'native owns configured folder');check(document.querySelector('[data-action=show-export-folder]')&&document.querySelector('[data-action=open-exported-clip]'),'completion actions')")
         pump(1200)
         js("""
         document.querySelector('#trim-start-bar').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true}));
@@ -340,10 +342,10 @@ with tempfile.TemporaryDirectory(prefix="redunar-replay-ui-") as temporary:
         js("document.querySelector('#export-clip-button').click()")
         pump(100)
         screenshot("export-dialog.png")
-        js("check(document.querySelectorAll('.export-summary .stat').length===3,'export summary has three columns');document.querySelector('#dialog [data-close]').click();const seek=document.querySelector('#player-seek');check(!seek.disabled,'seek enabled');seek.value='1';seek.dispatchEvent(new Event('input',{bubbles:true}));")
+        js("check(document.querySelector('[name=outputName]'),'editable export filename');check(document.querySelector('#export-destination'),'configured destination');check(!document.querySelector('.export-summary'),'trim details stay in editor');document.querySelector('#dialog [data-close]').click();const seek=document.querySelector('#player-seek');check(!seek.disabled,'seek enabled');seek.value='1';seek.dispatchEvent(new Event('input',{bubbles:true}));")
         pump(200)
         js("check(Math.abs(document.querySelector('#clip-video').currentTime-1)<.1,'precision seek reaches requested time')")
-        js("const selected=document.querySelector('[data-selected-clip-title]').textContent;document.querySelector('[data-action=delete-selected-clip]').click();check(document.querySelector('#delete-clip-form [name=fileName]').value===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
+        js("const selected=document.querySelector('[data-selected-clip-title]').textContent;document.querySelector('[data-action=delete-selected-clip]').click();check(JSON.parse(document.querySelector('#trash-clips-form [name=fileNames]').value)[0]===selected,'delete targets current selection');document.querySelector('#dialog [data-close]').click();")
         js("const resetStartHandle=document.querySelector('#trim-start-bar');resetStartHandle.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));check(!document.querySelector('[data-action=reset-trim]').disabled,'trim reset available');document.querySelector('[data-action=reset-trim]').click();check(document.querySelector('#trim-start-value').textContent==='00:00.0','trim starts at zero after reset');check(document.querySelector('#clip-selected-duration').textContent==='00:03.0','reset retains entire recording');check(!document.querySelector('#center-play').hidden,'center play visible while paused');document.querySelector('#center-play').click();")
         pump(300)
         js("check(!document.querySelector('#clip-video').paused,'center play starts video');check(document.querySelector('#center-play').hidden,'center control leaves playing picture clear');document.querySelector('#clip-play-toggle').click();")

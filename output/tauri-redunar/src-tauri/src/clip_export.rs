@@ -21,7 +21,7 @@ const OUTPUT_SIZE_MULTIPLIER: u64 = 2;
 static NEXT_EXPORT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Default)]
-pub struct ClipExports(Arc<Mutex<Option<ActiveExport>>>);
+pub struct ClipExports(Arc<Mutex<Option<ActiveExport>>>, Arc<AtomicBool>);
 
 struct ActiveExport {
     id: u64,
@@ -36,6 +36,9 @@ struct ExportJob {
 impl ClipExports {
     fn begin(&self) -> Result<(u64, Arc<ExportJob>), String> {
         let mut active = self.0.lock().map_err(|_| "Clip export is unavailable")?;
+        if self.1.load(Ordering::Acquire) {
+            return Err("Redunar is restarting".into());
+        }
         if active.is_some() {
             return Err("Another clip export is already running".into());
         }
@@ -63,12 +66,30 @@ impl ClipExports {
     // filename until archive/commit finishes; playback owns an open descriptor.
     pub fn with_idle<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         let active = self.0.lock().map_err(|_| "Clip export is unavailable")?;
+        if self.1.load(Ordering::Acquire) {
+            return Err("Redunar is restarting".into());
+        }
         if active.is_some() {
             return Err(
                 "Finish or cancel the export before changing the clip or replay folder".into(),
             );
         }
         action()
+    }
+
+    pub(crate) fn claim_restart(
+        &self,
+        claim: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.with_idle(|| {
+            claim()?;
+            self.1.store(true, Ordering::Release);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn cancel_restart(&self) {
+        self.1.store(false, Ordering::Release);
     }
 
     pub fn shutdown(&self) {
@@ -91,6 +112,7 @@ pub struct ExportedClip {
     file_name: String,
     bytes: u64,
     duration_seconds: f64,
+    destination: String,
 }
 
 #[tauri::command]
@@ -126,6 +148,7 @@ pub async fn export_replay_clip(
     file_name: String,
     start_seconds: f64,
     end_seconds: f64,
+    output_name: Option<String>,
     exports: tauri::State<'_, ClipExports>,
 ) -> Result<ExportedClip, String> {
     crate::backend::ensure_write_access()?;
@@ -147,6 +170,7 @@ pub async fn export_replay_clip(
             start_seconds,
             duration,
             &job,
+            output_name.as_deref(),
         )
     })
     .await
@@ -176,6 +200,7 @@ fn export_clip(
     start_seconds: f64,
     duration_seconds: f64,
     job: &ExportJob,
+    output_name: Option<&str>,
 ) -> Result<ExportedClip, String> {
     // Validate the inspection tool before spending time encoding an export.
     let _probe = crate::media_tools::ffprobe()?;
@@ -216,9 +241,11 @@ fn export_clip(
         .map_err(|error| error.to_string())?;
     let mut rendered = File::open(&temporary.path)
         .map_err(|error| format!("The trimmed clip could not be reopened: {error}"))?;
-    let saved = store
-        .save_mp4_preserving_existing(&mut rendered)
-        .map_err(|error| error.to_string())?;
+    let saved = match output_name {
+        Some(stem) => store.save_named_mp4_preserving_existing(&mut rendered, stem),
+        None => store.save_mp4_preserving_existing(&mut rendered),
+    }
+    .map_err(|error| error.to_string())?;
     let file_name = saved
         .path
         .file_name()
@@ -228,13 +255,22 @@ fn export_clip(
     // Carry the source clip's game attribution onto the trimmed export.
     // Labeling only: a ledger failure never fails a completed export.
     if let Some(game_name) = source_game_name {
-        let _ = crate::backend::service().record_clip_game(&file_name, &game_name);
+        let identity = store.inventory().ok().and_then(|clips| {
+            clips
+                .into_iter()
+                .find(|clip| clip.file_name == file_name)
+                .map(|clip| clip.original_file_name)
+        });
+        if let Some(identity) = identity {
+            let _ = crate::backend::service().record_clip_game(&identity, &game_name);
+        }
     }
     job.progress_thousandths.store(1000, Ordering::Release);
     Ok(ExportedClip {
         file_name,
         bytes: saved.bytes,
         duration_seconds: actual_duration,
+        destination: store.directory().to_string_lossy().into_owned(),
     })
 }
 
@@ -542,6 +578,23 @@ mod tests {
         );
         exports.finish(next);
         assert!(exports.with_idle(|| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn restart_claim_rejects_exports_and_failed_claims_keep_admission() {
+        let exports = ClipExports::default();
+        let (id, _) = exports.begin().unwrap();
+        assert!(exports.claim_restart(|| Ok(())).is_err());
+        exports.finish(id);
+        assert!(exports
+            .claim_restart(|| Err("Session started".into()))
+            .is_err());
+        let (id, _) = exports.begin().unwrap();
+        exports.finish(id);
+        exports.claim_restart(|| Ok(())).unwrap();
+        assert!(exports.begin().is_err());
+        assert!(exports.claim_restart(|| Ok(())).is_err());
+        assert!(exports.with_idle(|| Ok(())).is_err());
     }
 
     #[test]

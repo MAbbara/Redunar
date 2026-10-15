@@ -80,10 +80,13 @@ fn invalid() -> io::Error {
     io::Error::other("Replay filename metadata is invalid. Recordings have not been changed.")
 }
 pub(super) fn load(directory: &Path) -> io::Result<Labels> {
+    load_from(directory, FILE)
+}
+pub(super) fn load_from(directory: &Path, file_name: &str) -> io::Result<Labels> {
     let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(directory.join(FILE))
+        .open(directory.join(file_name))
     {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Labels::new()),
@@ -138,13 +141,16 @@ pub(super) fn load(directory: &Path) -> io::Result<Labels> {
     Ok(labels)
 }
 pub(super) fn save(directory: &Path, labels: &mut Labels) -> io::Result<()> {
+    save_to(directory, FILE, labels)
+}
+pub(super) fn save_to(directory: &Path, file_name: &str, labels: &Labels) -> io::Result<()> {
     // Callers retain pending destination entries until rename commits. Pruning
     // happens before a mutation, never here, so crash recovery remains valid.
     if labels.len() > MAX_ENTRIES {
         return Err(invalid());
     }
     let mut text = format!("{HEADER}\n");
-    for (name, label) in labels.iter() {
+    for (name, label) in labels {
         let _ = writeln!(
             text,
             "{}\t{}\t{}\t{}\t{}",
@@ -163,7 +169,7 @@ pub(super) fn save(directory: &Path, labels: &mut Labels) -> io::Result<()> {
     let result = (|| {
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&temporary, directory.join(FILE))?;
+        fs::rename(&temporary, directory.join(file_name))?;
         super::replay_store::sync_directory(directory)
     })();
     if result.is_err() {

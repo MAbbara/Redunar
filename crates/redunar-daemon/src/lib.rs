@@ -853,6 +853,46 @@ impl RedunarService {
         .map_err(|error| ReplayStorageAccessError::delete(&error))
     }
 
+    /// List recoverable clips in the configured store without initializing it.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage or invalid metadata, just like the live inventory.
+    pub fn replay_trash_inventory(&self) -> Result<Vec<ReplayClipEntry>, ReplayStorageAccessError> {
+        let directory = self.replay_save_directory()?;
+        if std::fs::symlink_metadata(&directory)
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            return Ok(Vec::new());
+        }
+        let settings = self
+            .load_game_catalog()
+            .map_err(|e| ReplayStorageAccessError::catalog(&e))?
+            .global_profile
+            .replay;
+        let store =
+            ReplayClipStore::open_existing(directory, ReplayBudget::from_settings(settings))
+                .map_err(|e| ReplayStorageAccessError::inventory(&e))?;
+        Ok(self.attach_clip_games(
+            store
+                .trash_inventory()
+                .map_err(|e| ReplayStorageAccessError::inventory(&e))?,
+        ))
+    }
+
+    /// Change one owned clip's recoverable bin state. No media bytes are deleted.
+    ///
+    /// # Errors
+    /// Rejects read-only ownership, unsafe identifiers and failed persistence.
+    pub fn set_replay_clip_trashed(
+        &self,
+        file_name: &str,
+        trashed: bool,
+    ) -> Result<(), ReplayStorageAccessError> {
+        self.clip_mutation_store()?
+            .set_trashed(file_name, trashed)
+            .map_err(|e| ReplayStorageAccessError::inventory(&e))
+    }
+
     /// Rename an exact owned recording, preserving persisted labeling.
     ///
     /// # Errors
@@ -1857,11 +1897,26 @@ mod tests {
         assert!(entries[0].favorite);
         let restarted = RedunarService::with_state_directory(&state);
         assert!(restarted.replay_clip_inventory().unwrap()[0].favorite);
+        service
+            .set_replay_clip_trashed("Great lap.mkv", true)
+            .unwrap();
+        assert!(service.replay_clip_inventory().unwrap().is_empty());
+        assert_eq!(
+            service.replay_trash_inventory().unwrap()[0]
+                .game_name
+                .as_deref(),
+            Some("Local game")
+        );
+        service
+            .set_replay_clip_trashed("Great lap.mkv", false)
+            .unwrap();
+        assert!(service.replay_clip_inventory().unwrap()[0].favorite);
         service.delete_replay_clip("Great lap.mkv").unwrap();
         assert!(service.replay_clip_inventory().unwrap().is_empty());
         let mut secondary = RedunarService::with_state_directory(&state);
         secondary.read_only = true;
         assert!(secondary.rename_replay_clip(name, "No.mkv").is_err());
+        assert!(secondary.set_replay_clip_trashed(name, true).is_err());
         assert!(secondary.set_replay_clip_favorite(name, true).is_err());
     }
 

@@ -36,6 +36,14 @@ Record process scope, host, driver, build, workload, duration, and method.
 - Keep catalog/artwork/media discovery outside monitor ticks and frame callbacks.
   Bound file sizes, records, parsed arguments, worker counts, and queues.
 
+The shortcut helper has one keyboard supervisor and one stdin watcher, with a
+128-item event queue. Every 8 ms it reads at most 32 input events from each of at
+most 16 nonblocking keyboard handles. Keyboard discovery runs once per second
+and inspects at most 64 entries in each of two input-link directories. It emits
+availability only when the readable-device count changes. Shutdown drops the
+queue before joining the supervisor so a full queue cannot strand cleanup.
+These bounds are not a measured live-game CPU qualification.
+
 ## Replay bounds
 
 Vulkan device-extension discovery allocates at most 1,024 fixed 260-byte records
@@ -253,3 +261,10 @@ launch, outside presentation and monitoring callbacks. The wrapper waits at
 most ten seconds for background startup plus ten seconds for the accepted
 request; denial never retries by starting another app. Existing one-shot
 activation, renderer-startup, process-scan and frame-transfer bounds still apply.
+
+The recoverable trash ledger is store-local, at most 4,096 inode-bound entries and
+2 MiB, matching filename metadata bounds. Inventory scans the existing bounded
+directory; trash never copies video. Named exports retain the existing byte/time
+budgets and reject collisions without extra published files. Microphone UI status
+reads existing packet timestamps under the audio mutex, with no additional thread,
+I/O or discovery at the UI poll cadence.

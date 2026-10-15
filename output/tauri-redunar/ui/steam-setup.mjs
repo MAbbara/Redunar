@@ -12,11 +12,10 @@ function setupContent(setup) {
   const configured = setup.configured === true;
   const needsAttention = !configured && !['not-configured', 'steam-running'].includes(setup.configuration_state);
   const options = setup.launch_options || '';
-  return `${configured ? '<p class="steam-setup-status">Launch option configured</p>' : ''}<p>${configured
-    ? 'Press Play in Steam. Redunar starts automatically.'
-    : 'Paste this into Steam’s Launch Options, then press Play.'}</p>
+  if (configured) return `<div class="steam-configured-row" data-steam-configured><details class="steam-configured-details"><summary aria-label="Steam launch options"><span class="steam-configured-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m7 12 3 3 7-7"/><circle cx="12" cy="12" r="9"/></svg></span><span class="steam-configured-copy"><strong>Steam launch option detected</strong><span>Launch in Steam or through Redunar.</span></span><span class="steam-configured-toggle">Launch options<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></summary><div class="steam-configured-options"><label for="steam-launch-options">Saved launch option</label><div class="steam-options-field"><textarea id="steam-launch-options" aria-label="Steam Launch Options" rows="2" readonly spellcheck="false">${escape(options)}</textarea><button class="button" type="button" data-copy-steam-options="${escape(options)}">Copy</button></div></div></details></div>`;
+  return `<p>Paste this into Steam’s Launch Options, then press Play.</p>
     ${options ? `<div class="steam-options-field"><textarea id="steam-launch-options" aria-label="Steam Launch Options" rows="2" readonly spellcheck="false">${escape(options)}</textarea><button class="button primary" type="button" data-copy-steam-options="${escape(options)}">Copy</button></div>` : ''}
-    ${!configured ? '<p class="steam-setup-caption">Set up once. Redunar starts automatically with the game.</p>' : ''}
+    <p class="steam-setup-caption">Set up once. Redunar starts automatically with the game.</p>
     ${needsAttention ? `<div class="steam-setup-notice"><p class="steam-setup-status">Setup unconfirmed</p><p>${escape(setup.status)}</p>${retry}</div>` : ''}`;
 }
 

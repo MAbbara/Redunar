@@ -1,3 +1,6 @@
+mod named_export;
+mod trash;
+
 use crate::replay_clip_labels::{self as labels, Label};
 use crate::{
     ReplayAudioSnapshot, ReplayAudioTracks, ReplayBudget, ReplayOutputFormat, ReplayRing,
@@ -110,6 +113,7 @@ struct OwnedClip {
     modified: SystemTime,
     original_file_name: String,
     favorite: bool,
+    trashed: bool,
 }
 
 impl OwnedClip {
@@ -117,6 +121,7 @@ impl OwnedClip {
         Self {
             original_file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
             favorite: false,
+            trashed: false,
             path,
             bytes,
             modified,
@@ -504,6 +509,10 @@ impl ReplayClipStore {
     /// Returns [`ReplayStoreError`] when the store was replaced, its marker is
     /// invalid, or the bounded directory scan fails.
     pub fn inventory(&self) -> Result<Vec<ReplayClipEntry>, ReplayStoreError> {
+        self.inventory_state(false)
+    }
+
+    fn inventory_state(&self, trashed: bool) -> Result<Vec<ReplayClipEntry>, ReplayStoreError> {
         let _operation = store_operation();
         validate_store(&self.directory)?;
         let mut clips = scan_owned_clips(&self.directory)?;
@@ -515,6 +524,7 @@ impl ReplayClipStore {
         });
         clips
             .into_iter()
+            .filter(|clip| clip.trashed == trashed)
             .map(|clip| {
                 let file_name = clip
                     .path
@@ -559,6 +569,7 @@ impl ReplayClipStore {
         let _operation = store_operation();
         validate_store(&self.directory)?;
         let (metadata, label) = owned_metadata(&self.directory, file_name)?;
+        trash::require_live(&self.directory, file_name, &metadata)?;
         if file_name == new_name {
             return Ok(());
         }
@@ -609,7 +620,8 @@ impl ReplayClipStore {
     pub fn set_favorite(&self, file_name: &str, favorite: bool) -> Result<(), ReplayStoreError> {
         let _operation = store_operation();
         validate_store(&self.directory)?;
-        let (_, mut label) = owned_metadata(&self.directory, file_name)?;
+        let (metadata, mut label) = owned_metadata(&self.directory, file_name)?;
+        trash::require_live(&self.directory, file_name, &metadata)?;
         let mut registry = labels::load(&self.directory)
             .map_err(|e| io_error("could not read replay filename metadata", &e))?;
         labels::prune(&self.directory, &mut registry);
@@ -1254,6 +1266,8 @@ fn owned_metadata(directory: &Path, name: &str) -> Result<(fs::Metadata, Label),
 
 fn scan_owned_clips(directory: &Path) -> Result<Vec<OwnedClip>, ReplayStoreError> {
     let mut clips = Vec::new();
+    let trash = labels::load_from(directory, trash::FILE)
+        .map_err(|e| io_error("could not read Replay trash bin", &e))?;
     let labels = labels::load(directory)
         .map_err(|e| io_error("could not read replay filename metadata", &e))?;
     for (index, entry) in fs::read_dir(directory)
@@ -1284,6 +1298,7 @@ fn scan_owned_clips(directory: &Path) -> Result<Vec<OwnedClip>, ReplayStoreError
                 modified: metadata.modified().unwrap_or(UNIX_EPOCH),
                 original_file_name: label.map_or_else(|| name.to_owned(), |l| l.original.clone()),
                 favorite: label.is_some_and(|l| l.favorite),
+                trashed: trash.get(name).is_some_and(|l| l.matches(&metadata)),
             });
         }
     }
@@ -1923,6 +1938,7 @@ mod tests {
                 modified: UNIX_EPOCH,
                 original_file_name: String::new(),
                 favorite: false,
+                trashed: false,
             },
             OwnedClip {
                 path: older.clone(),
@@ -1930,6 +1946,7 @@ mod tests {
                 modified: SystemTime::now(),
                 original_file_name: String::new(),
                 favorite: false,
+                trashed: false,
             },
         ];
         let removed =

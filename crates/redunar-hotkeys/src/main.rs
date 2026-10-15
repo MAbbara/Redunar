@@ -11,6 +11,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod keyboards;
+use keyboards::{KeyboardEvent, Keyboards};
+
 mod pointer_capture;
 use pointer_capture::{grab_all, release_all};
 
@@ -29,6 +32,7 @@ const POINTER_BASE_GAIN_MILLI: i64 = 8_500;
 const POINTER_SPEED_GAIN_MILLI: i64 = 300;
 const POINTER_SPEED_LIMIT: i64 = 32;
 const POINTER_VERTICAL_RATIO_MILLI: i64 = 1_568;
+const KEYBOARD_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const EVENT_TICK: Duration = Duration::from_millis(8);
 const CHORD_BATCH_WINDOW: Duration = Duration::from_millis(4);
 const MAX_CHORD_BATCH: usize = 32;
@@ -165,23 +169,14 @@ fn run() -> Result<(), String> {
     let uid = authenticated_parent_uid()?;
     let mut input = BufReader::new(io::stdin());
     let bindings = read_bindings(&mut input)?;
-    let devices = keyboard_devices();
-    if devices.is_empty() {
-        return Err("no readable keyboard input device was found".to_owned());
-    }
     let mut mice = Vec::new();
 
     let stop = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = mpsc::sync_channel(128);
-    let mut workers = Vec::new();
-    for (device, path) in devices.into_iter().enumerate() {
-        let sender = sender.clone();
-        let stop = Arc::clone(&stop);
-        workers.push(thread::spawn(move || {
-            read_keyboard(device, &path, &stop, &sender);
-        }));
-    }
-    drop(sender);
+    let keyboard_stop = Arc::clone(&stop);
+    let keyboard_worker = thread::spawn(move || {
+        supervise_keyboards(&keyboard_stop, &sender);
+    });
     let input_stop = Arc::clone(&stop);
     let input_worker = thread::spawn(move || {
         let mut sink = [0_u8; 64];
@@ -189,22 +184,23 @@ fn run() -> Result<(), String> {
         input_stop.store(true, Ordering::Release);
     });
 
-    println!("READY {}", workers.len());
-    io::stdout().flush().map_err(|error| error.to_string())?;
     let control_path = PathBuf::from(format!("/run/user/{uid}/redunar/replay-control-v1.sock"));
-    monitor_events(
+    let result = monitor_events(
         &receiver,
         &stop,
         &bindings,
         &control_path,
         &mut mice,
         || open_mouse_devices(&mouse_devices()),
-    )?;
+    );
     release_all(&mut mice);
     stop.store(true, Ordering::Release);
-    drop(workers);
-    let _ = input_worker.join();
-    Ok(())
+    // Dropping the bounded queue wakes a supervisor blocked on a full queue.
+    drop(receiver);
+    let _ = keyboard_worker.join();
+    // stdin is owned by a blocking EOF watcher; the process exit closes it.
+    drop(input_worker);
+    result
 }
 
 fn authenticated_parent_uid() -> Result<u32, String> {
@@ -502,34 +498,52 @@ fn open_mouse_devices(paths: &[PathBuf]) -> Vec<Device> {
         .collect()
 }
 
-fn read_keyboard(
-    device: usize,
-    path: &Path,
+fn supervise_keyboards(stop: &AtomicBool, sender: &mpsc::SyncSender<KeyboardEvent>) {
+    supervise_keyboard_input(
+        stop,
+        sender,
+        || {
+            keyboard_devices()
+                .into_iter()
+                .filter_map(|path| {
+                    keyboards::identity(&path)
+                        .ok()
+                        .map(|identity| (path, identity))
+                })
+                .collect()
+        },
+        keyboards::open,
+    );
+}
+
+fn supervise_keyboard_input<I: Read>(
     stop: &AtomicBool,
-    sender: &mpsc::SyncSender<KeyEvent>,
+    sender: &mpsc::SyncSender<KeyboardEvent>,
+    mut discover: impl FnMut() -> Vec<(PathBuf, keyboards::Identity)>,
+    mut open: impl FnMut(&Path) -> io::Result<(keyboards::Identity, I)>,
 ) {
-    let Ok(mut input) = File::open(path) else {
-        return;
-    };
-    let mut bytes = [0_u8; INPUT_EVENT_BYTES];
-    while !stop.load(Ordering::Acquire) && input.read_exact(&mut bytes).is_ok() {
-        let event_type = u16::from_ne_bytes([bytes[16], bytes[17]]);
-        if event_type != EV_KEY {
-            continue;
+    let mut keyboards = Keyboards::new();
+    let mut next_refresh = Instant::now();
+    while !stop.load(Ordering::Acquire) {
+        let now = Instant::now();
+        let mut events = Vec::new();
+        if now >= next_refresh {
+            let candidates = discover();
+            events.extend(keyboards.refresh(&candidates, &mut open));
+            next_refresh = now + KEYBOARD_REFRESH_INTERVAL;
         }
-        let event = KeyEvent {
-            device,
-            code: u16::from_ne_bytes([bytes[18], bytes[19]]),
-            value: i32::from_ne_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
-        };
-        if sender.send(event).is_err() {
-            break;
+        events.extend(keyboards.poll());
+        for event in events {
+            if stop.load(Ordering::Acquire) || sender.send(event).is_err() {
+                return;
+            }
         }
+        thread::sleep(EVENT_TICK);
     }
 }
 
 fn monitor_events(
-    receiver: &mpsc::Receiver<KeyEvent>,
+    receiver: &mpsc::Receiver<KeyboardEvent>,
     stop: &AtomicBool,
     bindings: &[KeyChord],
     control_path: &Path,
@@ -543,6 +557,27 @@ fn monitor_events(
             Ok(event) => {
                 let events = chord_event_batch(receiver, event);
                 for event in events {
+                    let event = match event {
+                        KeyboardEvent::Key(event) => event,
+                        KeyboardEvent::Removed(device) => {
+                            // A missed release must not suppress the replacement
+                            // keyboard or strand the menu's exclusive mouse grab.
+                            pressed.retain(|&(generation, _)| generation != device);
+                            if menu.open {
+                                close_menu(control_path, mice, &mut menu, b"MENU ESCAPE\n");
+                            }
+                            continue;
+                        }
+                        KeyboardEvent::Availability(count) => {
+                            if count == 0 {
+                                println!("WAITING KEYBOARD");
+                            } else {
+                                println!("READY {count}");
+                            }
+                            io::stdout().flush().map_err(|error| error.to_string())?;
+                            continue;
+                        }
+                    };
                     let identity = (event.device, event.code);
                     // Escape is the menu's recovery path as well as its normal
                     // dismissal key. Handle it before composite-device press
@@ -727,7 +762,10 @@ fn toggle_menu(control_path: &Path, mice: &mut [Device], menu: &mut MenuCapture)
     }
 }
 
-fn chord_event_batch(receiver: &mpsc::Receiver<KeyEvent>, first: KeyEvent) -> Vec<KeyEvent> {
+fn chord_event_batch(
+    receiver: &mpsc::Receiver<KeyboardEvent>,
+    first: KeyboardEvent,
+) -> Vec<KeyboardEvent> {
     let mut events = Vec::with_capacity(8);
     events.push(first);
     let deadline = Instant::now() + CHORD_BATCH_WINDOW;
@@ -745,17 +783,28 @@ fn chord_event_batch(receiver: &mpsc::Receiver<KeyEvent>, first: KeyEvent) -> Ve
     // different event interfaces. Reader-thread scheduling is not a chord
     // ordering contract, so apply modifier presses first and releases last
     // within this tiny bounded window.
-    events.sort_by_key(|event| {
-        let priority = match (event.value, is_modifier_key(event.code)) {
-            (1, true) => 0,
-            (1, false) => 1,
-            (2, _) => 2,
-            (0, false) => 3,
-            (0, true) => 4,
-            _ => 5,
-        };
-        (priority, event.device, event.code)
-    });
+    // Lifecycle messages are barriers: no press from an old generation may
+    // be reordered past its removal. Sort only contiguous keyboard edges.
+    let mut start = 0;
+    for end in 0..=events.len() {
+        if end == events.len() || !matches!(events[end], KeyboardEvent::Key(_)) {
+            events[start..end].sort_by_key(|event| {
+                let KeyboardEvent::Key(event) = event else {
+                    unreachable!()
+                };
+                let priority = match (event.value, is_modifier_key(event.code)) {
+                    (1, true) => 0,
+                    (1, false) => 1,
+                    (2, _) => 2,
+                    (0, false) => 3,
+                    (0, true) => 4,
+                    _ => 5,
+                };
+                (priority, event.device, event.code)
+            });
+            start = end + 1;
+        }
+    }
     events
 }
 
@@ -1154,25 +1203,34 @@ mod tests {
     fn composite_keyboard_batch_applies_modifier_press_before_function_key() {
         let (sender, receiver) = mpsc::sync_channel(4);
         sender
-            .send(KeyEvent {
+            .send(KeyboardEvent::Key(KeyEvent {
                 device: 0,
                 code: 66,
                 value: 1,
-            })
+            }))
             .unwrap();
         sender
-            .send(KeyEvent {
+            .send(KeyboardEvent::Key(KeyEvent {
                 device: 1,
                 code: KEY_LEFTSHIFT,
                 value: 1,
-            })
+            }))
             .unwrap();
         drop(sender);
         let first = receiver.recv().unwrap();
         let events = chord_event_batch(&receiver, first);
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].code, KEY_LEFTSHIFT);
-        assert_eq!(events[1].code, 66);
+        assert!(matches!(
+            events[0],
+            KeyboardEvent::Key(KeyEvent {
+                code: KEY_LEFTSHIFT,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events[1],
+            KeyboardEvent::Key(KeyEvent { code: 66, .. })
+        ));
     }
 
     #[test]
@@ -1186,7 +1244,7 @@ mod tests {
         let server_stop = Arc::clone(&stop);
         let (sender, receiver) = mpsc::sync_channel(16);
         let chord = parse_chord("Alt+Shift+Z").unwrap();
-        let send_chord = move |sender: &mpsc::SyncSender<KeyEvent>| {
+        let send_chord = move |sender: &mpsc::SyncSender<KeyboardEvent>| {
             // Include duplicate Z edges from a composite keyboard, and release
             // both modifiers. None of these may immediately dismiss the menu.
             for value in [1, 0] {
@@ -1197,11 +1255,11 @@ mod tests {
                     (1, chord.key),
                 ] {
                     sender
-                        .send(KeyEvent {
+                        .send(KeyboardEvent::Key(KeyEvent {
                             device,
                             code,
                             value,
-                        })
+                        }))
                         .unwrap();
                 }
             }
@@ -1251,6 +1309,194 @@ mod tests {
             refreshes, 1,
             "refresh on opening, never during an owned menu"
         );
+    }
+
+    #[test]
+    fn keyboard_supervisor_joins_when_shutdown_drops_a_full_queue() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        // Metadata is a private regular file; opening is replaced entirely.
+        let directory = std::env::temp_dir().join(format!("rd-key-stop-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("identity");
+        fs::write(&path, []).unwrap();
+        let identity = keyboards::identity(&path).unwrap();
+        let mut bytes = Vec::new();
+        for _ in 0..32 {
+            let mut event = [0; INPUT_EVENT_BYTES];
+            event[16..18].copy_from_slice(&EV_KEY.to_ne_bytes());
+            event[18..20].copy_from_slice(&44_u16.to_ne_bytes());
+            event[20..24].copy_from_slice(&1_i32.to_ne_bytes());
+            bytes.extend_from_slice(&event);
+        }
+        let (done_sender, done_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            supervise_keyboard_input(
+                &worker_stop,
+                &sender,
+                || vec![(path.clone(), identity)],
+                |_| Ok((identity, io::Cursor::new(bytes.clone()))),
+            );
+            done_sender.send(()).unwrap();
+        });
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            KeyboardEvent::Availability(1)
+        );
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            KeyboardEvent::Key(_)
+        ));
+        stop.store(true, Ordering::Release);
+        drop(receiver);
+        done_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("supervisor stranded on queue or input");
+        worker.join().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn lost_keyboard_clears_modifiers_and_duplicate_state_before_replacement_save() {
+        let directory = std::env::temp_dir().join(format!("rd-key-save-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let (sender, receiver) = mpsc::sync_channel(16);
+        for event in [
+            KeyboardEvent::Key(KeyEvent {
+                device: 0,
+                code: KEY_LEFTSHIFT,
+                value: 1,
+            }),
+            KeyboardEvent::Key(KeyEvent {
+                device: 0,
+                code: 44,
+                value: 1,
+            }),
+            KeyboardEvent::Removed(0),
+            KeyboardEvent::Availability(0),
+            KeyboardEvent::Availability(2),
+            KeyboardEvent::Key(KeyEvent {
+                device: 1,
+                code: KEY_LEFTALT,
+                value: 1,
+            }),
+            KeyboardEvent::Key(KeyEvent {
+                device: 1,
+                code: 44,
+                value: 1,
+            }),
+            KeyboardEvent::Key(KeyEvent {
+                device: 2,
+                code: 44,
+                value: 1,
+            }),
+        ] {
+            sender.send(event).unwrap();
+        }
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut saved = false;
+            let mut quiet_until = deadline;
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        assert!(!saved, "composite keyboard submitted duplicate save");
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut request = String::new();
+                        BufReader::new(&mut stream).read_line(&mut request).unwrap();
+                        assert_eq!(request, "SAVE 30\n");
+                        stream.write_all(b"OK\n").unwrap();
+                        saved = true;
+                        quiet_until = Instant::now() + Duration::from_millis(80);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if saved && Instant::now() >= quiet_until {
+                            break;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "replacement keyboard did not save"
+                        );
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("save fixture failed: {error}"),
+                }
+            }
+            server_stop.store(true, Ordering::Release);
+        });
+        let mut chord = parse_chord("Alt+Z").unwrap();
+        chord.action = HotkeyAction::Save(30);
+        let result = monitor_events(&receiver, &stop, &[chord], &path, &mut Vec::new(), Vec::new);
+        let server_result = server.join();
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        server_result.unwrap();
+    }
+
+    #[test]
+    fn keyboard_removal_closes_menu_through_owner_even_without_pointer_access() {
+        let directory = std::env::temp_dir().join(format!("rd-key-menu-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("control.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let (sender, receiver) = mpsc::sync_channel(4);
+        sender
+            .send(KeyboardEvent::Key(KeyEvent {
+                device: 0,
+                code: 66,
+                value: 1,
+            }))
+            .unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "menu did not open");
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("menu fixture failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            assert_eq!(request, "MENU TOGGLE\n");
+            reader.get_mut().write_all(b"OK GRAB\n").unwrap();
+            sender.send(KeyboardEvent::Removed(0)).unwrap();
+            request.clear();
+            reader.read_line(&mut request).unwrap();
+            assert_eq!(request, "MENU ESCAPE\n");
+            reader.get_mut().write_all(b"OK RELEASE\n").unwrap();
+            server_stop.store(true, Ordering::Release);
+        });
+        let result = monitor_events(
+            &receiver,
+            &stop,
+            &[parse_chord("F8").unwrap()],
+            &path,
+            &mut Vec::new(),
+            Vec::new,
+        );
+        let server_result = server.join();
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        server_result.unwrap();
     }
 
     #[test]

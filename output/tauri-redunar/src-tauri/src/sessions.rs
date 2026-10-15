@@ -299,6 +299,10 @@ impl Sessions {
         engine.update_game_overlay_config(game_id)
     }
 
+    pub(crate) fn claim_update_restart(&self) -> Result<(), String> {
+        lock(&self.shared.engine).claim_update_restart()
+    }
+
     pub fn end_for_exit(&self) -> Result<(), String> {
         let mut engine = lock(&self.shared.engine);
         engine.shutdown = true;
@@ -376,6 +380,14 @@ impl Engine {
             shutdown: false,
             lifecycle: crate::session_lifecycle::Lifecycle::default(),
         }
+    }
+
+    fn claim_update_restart(&mut self) -> Result<(), String> {
+        self.ensure_idle()
+            .map_err(|_| "End the game session before restarting Redunar".to_owned())?;
+        // Same lock as manual launch and authenticated Steam attachment.
+        self.shutdown = true;
+        Ok(())
     }
 
     fn prepare_background_exit(&mut self, generation: u64) -> Result<bool, String> {

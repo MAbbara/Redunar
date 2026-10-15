@@ -33,7 +33,13 @@ pub fn replay_clips() -> Result<Vec<Clip>, String> {
         .replay_clip_inventory()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|clip| Clip {
+        .map(Into::into)
+        .collect())
+}
+
+impl From<redunar_daemon::ReplayClipEntry> for Clip {
+    fn from(clip: redunar_daemon::ReplayClipEntry) -> Self {
+        Self {
             title: Path::new(&clip.file_name)
                 .file_stem()
                 .unwrap_or_default()
@@ -44,8 +50,8 @@ pub fn replay_clips() -> Result<Vec<Clip>, String> {
             modified_unix_ns: clip.modified_unix_ns.to_string(),
             game_name: clip.game_name,
             favorite: clip.favorite,
-        })
-        .collect())
+        }
+    }
 }
 
 fn regular_clip_path(directory: &Path, file_name: &str) -> Result<PathBuf, String> {
