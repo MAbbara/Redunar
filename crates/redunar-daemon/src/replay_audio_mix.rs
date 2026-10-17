@@ -159,9 +159,18 @@ impl<'a> PcmCursor<'a> {
 }
 
 fn add_samples(frame: &PcmFrame, timestamp: u64, output: &mut [i32; FRAME_SAMPLES]) {
-    let overlap = frame.timestamp.max(timestamp);
-    let source_start = sample_offset(overlap.saturating_sub(frame.timestamp));
-    let destination_start = sample_offset(overlap.saturating_sub(timestamp));
+    // Quantize the signed displacement once. Flooring both positive overlap
+    // distances independently duplicates a stereo sample at every 20 ms join
+    // when capture clocks differ by a fractional sample (audible as crackle).
+    let displacement = ((i128::from(frame.timestamp) - i128::from(timestamp))
+        * i128::from(AUDIO_SAMPLE_RATE))
+    .div_euclid(1_000_000_000);
+    let bound = i128::try_from(AUDIO_FRAME_SAMPLES_PER_CHANNEL).expect("frame size fits");
+    let source_start =
+        usize::try_from((-displacement).clamp(0, bound)).expect("bounded source offset") * CHANNELS;
+    let destination_start = usize::try_from(displacement.clamp(0, bound))
+        .expect("bounded destination offset")
+        * CHANNELS;
     let count = FRAME_SAMPLES
         .saturating_sub(source_start)
         .min(FRAME_SAMPLES.saturating_sub(destination_start));
@@ -171,13 +180,6 @@ fn add_samples(frame: &PcmFrame, timestamp: u64, output: &mut [i32; FRAME_SAMPLE
     {
         *destination += i32::from(*source);
     }
-}
-
-fn sample_offset(nanoseconds: u64) -> usize {
-    usize::try_from(nanoseconds.saturating_mul(u64::from(AUDIO_SAMPLE_RATE)) / 1_000_000_000)
-        .unwrap_or(FRAME_SAMPLES)
-        .min(AUDIO_FRAME_SAMPLES_PER_CHANNEL)
-        * CHANNELS
 }
 
 fn audio_error(error: redunar_capture_audio::OpusEncoderError) -> io::Error {
@@ -307,6 +309,34 @@ mod tests {
                 .all(|sample| *sample == 2000)
         );
         assert!(tail[FRAME_SAMPLES / 2..].iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn fractional_sample_offsets_join_frames_without_spikes_or_repeated_samples() {
+        for (offset, shift) in [(1, 0), (10_417, 0), (10_000_001, 960), (19_999_999, 1918)] {
+            let mut output = [0; FRAME_SAMPLES];
+            for index in 0..2 {
+                let frame = PcmFrame {
+                    timestamp: offset + index * AUDIO_FRAME_DURATION_NS,
+                    samples: (0..FRAME_SAMPLES)
+                        .map(|sample| {
+                            i16::try_from(
+                                usize::try_from(index).unwrap() * FRAME_SAMPLES + sample + 1,
+                            )
+                            .unwrap()
+                        })
+                        .collect(),
+                };
+                add_samples(&frame, AUDIO_FRAME_DURATION_NS, &mut output);
+            }
+            for (index, sample) in output.iter().enumerate() {
+                assert_eq!(
+                    *sample,
+                    i32::try_from(FRAME_SAMPLES - shift + index + 1).unwrap(),
+                    "offset {offset}, sample {index}"
+                );
+            }
+        }
     }
 
     #[test]
